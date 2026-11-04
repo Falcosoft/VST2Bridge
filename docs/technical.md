@@ -8,8 +8,8 @@
 |---|---|---|
 | `<name>_x64.dll` | `bridge/stub.c` (64-bit, `vst2bridge-x64.dll`) | Loaded by a 64-bit host in place of the 32-bit plugin `<name>.dll` |
 | `<name>_x86.dll` | `bridge/stub.c` (32-bit, `vst2bridge-x86.dll`) | Loaded by a 32-bit host in place of the 64-bit plugin `<name>.dll` |
-| `<name>_x64.clap` | `bridge/clap.c` (64-bit, `vst2bridge-x64.clap`) | CLAP plugin for 64-bit hosts; loads `<name>_x64.dll` |
-| `<name>_x86.clap` | `bridge/clap.c` (32-bit, `vst2bridge-x86.clap`) | CLAP plugin for 32-bit hosts; loads `<name>_x86.dll` |
+| `<name>_x64.clap` | `bridge/clap.c` + `bridge/stub.c` (64-bit, `vst2bridge-x64.clap`) | CLAP plugin for 64-bit hosts; has the bridge built in and runs `<name>.dll` (needs no `_x64.dll`) |
+| `<name>_x86.clap` | `bridge/clap.c` + `bridge/stub.c` (32-bit, `vst2bridge-x86.clap`) | CLAP plugin for 32-bit hosts; has the bridge built in and runs `<name>.dll` (needs no `_x86.dll`) |
 | `vst2bridge-host32.exe` | `bridge/host.c` (32-bit) | Helper that runs a 32-bit plugin |
 | `vst2bridge-host64.exe` | `bridge/host.c` (64-bit) | Helper that runs a 64-bit plugin |
 | `<name>.clap` (Linux) | `bridge/clap.c` + `bridge/stub.c` (x86-64, `vst2bridge-linux.clap`) | CLAP plugin; runs `<name>.dll` (32 or 64-bit) in the helper of its bitness under Wine |
@@ -19,7 +19,7 @@ All bridge DLLs of one bitness are the same file; the bridge takes the plugin fr
 
 ## CLAP bridge
 
-The CLAP bridge (`bridge/clap.c`) is a VST2 host in a CLAP plugin: it loads the VST2 file that has its own name from its own folder (`foo_x64.clap` → `foo_x64.dll`, the VST2 bridge) into the host's process and translates every CLAP call into VST2 calls. The process boundary, the helper and the passing of data are those of the VST2 bridge, unchanged. All CLAP bridges of one bitness are the same file; it exports `clap_entry` and the marker `VST2BridgeClap`.
+The CLAP bridge (`bridge/clap.c`) is a VST2 host in a CLAP plugin: it creates the plugin through the VST2 bridge (`stub.c`, linked into the CLAP, so no separate bridge DLL is needed) and translates every CLAP call into VST2 calls. The plugin is the file with the CLAP's own name without the suffix (`foo_x64.clap` → `foo.dll` in the same folder). The process boundary, the helper and the passing of data are those of the VST2 bridge, unchanged. All CLAP bridges of one bitness are the same file; it exports `clap_entry` and the marker `VST2BridgeClap`.
 
 | CLAP | VST2 |
 |---|---|

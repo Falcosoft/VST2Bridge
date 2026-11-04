@@ -4,6 +4,7 @@ What changed in each Autobuild release, newest first. Releases are numbered `r<N
 
 | Release | Date | Changes |
 |---|---|---|
+| next | | Windows CLAP bridge: the VST2 bridge is built into the `.clap`, so it works on its own with the plugin and the helper exe (it no longer needs `<name>_x64.dll` next to it). The plugin is found by the `.clap` file name without `_x64` / `_x86`; a missing plugin is written to `%TEMP%\vst2bridge.log`. |
 | next | | Linux and macOS (Apple Silicon and Intel): patchers for both systems that write CLAP bridges only (`<name>.clap` + the helper of the plugin's bitness); the CLAP runs the Windows plugin (32-bit or 64-bit) under Wine. The plugin's window is embedded on Linux (X11) and floating on macOS. The patcher updates itself on all three systems. |
 | r4 | 2026-11-04 | Unusual sample rates: when the host runs at a rate other than 44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz (e.g. 32000 Hz), the plugin runs at 44100 Hz and the bridge converts audio and MIDI timing, so plugins like S-YXG50 keep the right pitch. `vst2bridge.ini` next to the plugin can set another rate or turn it off (VST2 and CLAP bridge). |
 | r4 | 2026-11-04 | CLAP bridge: plugins that set no "synth" flag and do not answer `effCanDo` (old instruments such as S-YXG50) are now offered as instruments with a MIDI input; before, hosts like Woof! rejected them and fell back to the previous MIDI synth. |

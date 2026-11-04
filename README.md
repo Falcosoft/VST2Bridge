@@ -11,7 +11,7 @@ The patcher writes a small bridge DLL and a CLAP bridge next to each plugin. The
 | `syxg50.dll` (32-bit) | `syxg50_x64.dll` (VST2) + `syxg50_x64.clap` (CLAP) + `vst2bridge-host32.exe` | 64-bit hosts |
 | `Emu-SC8850.dll` (64-bit) | `Emu-SC8850_x86.dll` (VST2) + `Emu-SC8850_x86.clap` (CLAP) + `vst2bridge-host64.exe` | 32-bit hosts |
 
-The CLAP bridge is a CLAP plugin around the VST2 bridge of the same name, so it offers the same plugin with the same features to CLAP hosts.
+The CLAP bridge has the VST2 bridge built in, so it works on its own: `<name>_x64.clap` needs only `<name>.dll` and the helper exe in the same folder, not `<name>_x64.dll`. It offers the same plugin with the same features to CLAP hosts.
 
 ### Linux and macOS
 
@@ -29,7 +29,7 @@ On macOS the `.clap` is a bundle (a folder), signed ad hoc by the patcher. **Win
 1. Download the patcher from the [latest release](https://github.com/NightFright2k19/VST2Bridge/releases/latest): `VST2Bridge-Patcher-r<N>-windows.exe`, `...-linux.tar.gz` (extract, run `VST2Bridge-Patcher`), `...-macos-applesilicon.zip` (M1 and newer) or `...-macos-intel.zip` (extract, open the app).
 2. Put it into a folder with your VST2 plugins (subfolders such as `Input` are fine), or start it anywhere and click **Choose…** to pick the plugin folder.
 3. The patcher finds the plugins and tells whether each is 32-bit or 64-bit. Click **Create bridges**.
-4. Windows: load `<plugin>_x64.dll` / `<plugin>_x64.clap` in a 64-bit host or `<plugin>_x86.dll` / `<plugin>_x86.clap` in a 32-bit host. CLAP hosts look in `C:\Program Files\Common Files\CLAP` by default: add the plugin folder to the host's CLAP folders. Keep the original plugin, both bridge files and the helper exe in the same folder (the `.clap` cannot be moved on its own).
+4. Windows: load `<plugin>_x64.dll` / `<plugin>_x64.clap` in a 64-bit host or `<plugin>_x86.dll` / `<plugin>_x86.clap` in a 32-bit host. CLAP hosts look in `C:\Program Files\Common Files\CLAP` by default: add the plugin folder to the host's CLAP folders. Keep the original plugin (`<name>.dll`, the name before `_x64` / `_x86`) and the helper exe in the same folder as the bridge files; the `.clap` finds its plugin by its own file name, so do not rename it.
    Linux / macOS: load `<plugin>.clap`; add the plugin folder to the host's CLAP folders (default folders: `~/.clap` on Linux, `~/Library/Audio/Plug-Ins/CLAP` on macOS; `CLAP_PATH` also works). Keep the `.clap`, the plugin DLL and the helper exe together. If a plugin does not load, the reason is in `vst2bridge.log` in the temp folder (`$TMPDIR` or `/tmp`); `VB_DEBUG=1` shows Wine's own messages.
 
 Hosts running at an unusual sample rate (e.g. 32000 Hz) get the plugin at 44100 Hz, converted by the bridge; `vst2bridge.ini` next to the plugin can change that (see [Sample rates](docs/technical.md#sample-rates)).

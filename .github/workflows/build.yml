@@ -224,7 +224,7 @@ jobs:
             - Click **Create bridges**. Next to every plugin the patcher writes a VST2 bridge and a CLAP bridge:
               - 32-bit plugin `syxg50.dll` → `syxg50_x64.dll` + `syxg50_x64.clap` (for 64-bit hosts) + `vst2bridge-host32.exe`
               - 64-bit plugin `Emu-SC8850.dll` → `Emu-SC8850_x86.dll` + `Emu-SC8850_x86.clap` (for 32-bit hosts) + `vst2bridge-host64.exe`
-            - Load the bridge in your host like any plugin (the `.dll` as VST2, the `.clap` as CLAP; let the CLAP host scan the plugin folder). Keep the original plugin, both bridge files and the helper exe in the same folder.
+            - Load the bridge in your host like any plugin (the `.dll` as VST2, the `.clap` as CLAP; let the CLAP host scan the plugin folder). Keep the original plugin and the helper exe in the same folder; the `.clap` also works without the `_x64.dll` / `_x86.dll`, but finds its plugin by its own file name, so do not rename it.
             - **Linux and macOS:** the patcher writes only CLAP bridges: `syxg50.dll` → `syxg50.clap` (macOS: a `.clap` bundle, signed ad hoc) + the helper of the plugin's bitness (`vst2bridge-host32.exe` or `vst2bridge-host64.exe`). The CLAP runs the Windows plugin in that helper under **Wine**, which must be installed (`wine` in the path, a usual install folder on macOS, or `VB_WINE`). The plugin's window is embedded on Linux (X11) and opens as a floating window on macOS (Wine on Apple Silicon needs Rosetta 2). Linux and macOS are not tested in real hosts yet: feedback welcome.
 
             **WHAT'S NEW**
