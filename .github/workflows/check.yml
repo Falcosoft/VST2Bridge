@@ -119,6 +119,6 @@ jobs:
           "$P" --cli "$PWD/t"
           find t
           codesign --verify --verbose t/plug32.clap
-          ./smoke t/plug32.clap
+          ./smoke t/plug32.clap/Contents/MacOS/plug32 "$PWD/t/plug32.clap"
           ./smoke t/plug32.clap/Contents/MacOS/plug32
           "$P" --cli "$PWD/t" | grep -q current
