@@ -51,6 +51,10 @@ jobs:
           cp bridge/vst2bridge-x64.dll bridge/vst2bridge-x86.dll bridge/vst2bridge-host32.exe bridge/vst2bridge-host64.exe bin/
           file bin/*
 
+      - name: Stop Wine
+        if: always()
+        run: wineserver -k || true          # leftover Wine processes make the job hang in its cleanup
+
       - name: Upload bridge
         uses: actions/upload-artifact@v4
         with:

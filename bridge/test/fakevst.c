@@ -71,7 +71,7 @@ static LRESULT CALLBACK ed_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
 
 static intptr_t VSTCALL dispatch(AEffect* e, int32_t op, int32_t idx, intptr_t val, void* ptr, float opt)
 {
-    (void)e;
+    (void)e; (void)opt;
     switch (op) {
     case effGetEffectName: strcpy((char*)ptr, "FakeVST"); return 1;
     case effGetVendorString: strcpy((char*)ptr, sizeof(void*) == 8 ? "Fake64" : "Fake32"); return 1;

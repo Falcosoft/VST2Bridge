@@ -8,7 +8,9 @@ if [ -z "${DISPLAY:-}" ]; then exec xvfb-run -a bash "$SELF" "$@"; fi      # no 
 cd "$HERE/.."
 export WINEDEBUG=-all
 make --no-print-directory
-T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+T="$(mktemp -d)"
+# end Wine with the tests: a wineserver left running keeps a CI job from finishing ("Cleaning up orphan processes")
+trap 'wineserver -k 2>/dev/null || true; rm -rf "$T"' EXIT
 CF="-O2 -Wall -Wextra -I."
 i686-w64-mingw32-gcc   $CF -shared -o "$T/fake32.dll" test/fakevst.c -static-libgcc -s
 x86_64-w64-mingw32-gcc $CF -shared -o "$T/fake64.dll" test/fakevst.c -static-libgcc -s
