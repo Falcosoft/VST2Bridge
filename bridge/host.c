@@ -1,9 +1,13 @@
 // host.c - the helper process. Built twice from this file: vst2bridge-host32.exe (runs 32-bit plugins for the
 // 64-bit bridge) and vst2bridge-host64.exe (runs 64-bit plugins for the 32-bit bridge).
-//   vst2bridge-hostNN.exe <plugin.dll> <object prefix> <shell id> <host pid>
+//   vst2bridge-hostNN.exe <plugin.dll> <object prefix> <shell id> <host pid>            Windows bridge: named objects
+//   vst2bridge-hostNN.exe <plugin.dll> net:<port>:<token>:<shared file> <shell id> 0     Linux / macOS CLAP (under Wine)
 // Loads one plugin and serves the bridge's calls (protocol.h): the main thread runs the window message loop and the
 // calls of the host's GUI / control thread, a second thread the calls of the host's audio thread.
+// Under Wine (net:) the shared memory is a file of the Linux / macOS side, the signals travel over four loopback TCP
+// connections (one byte per signal) and a lock word in shared memory replaces the named mutex (see protocol.h).
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
 #include <shellapi.h>
 #include <stdio.h>
@@ -13,8 +17,13 @@
 #include "protocol.h"
 #include "marshal.h"
 
+typedef struct { HANDLE ev; SOCKET s; } Sig;    // a signal to the bridge: a named event, or (net:) a byte on a socket
+
 static VbShared* sh;
-static HANDLE   ev_ready, mutex, ev_main_h, ev_main_s, ev_main_v, ev_audio_h, ev_audio_s, ev_aux_h, ev_aux_s;
+static HANDLE   mutex, ev_main_h, ev_audio_h, ev_aux_h;         // signals from the bridge (net: local events fed by readers)
+static Sig      sig_ready, sig_main_s, sig_main_v, sig_audio_s, sig_aux_s;
+static int      net;                            // 1: run by the Linux / macOS CLAP under Wine
+static char     title[64];                      // net: title of the editor window the Linux CLAP looks for
 static AEffect* fx;
 static DWORD    main_tid, audio_tid;
 static int      main_active, audio_active;      // >0: the thread takes part in a call on its channel
@@ -23,7 +32,7 @@ static volatile LONG quitting, closing;
 static int32_t  shell_id;
 static void*    chunk_ptr; static size_t chunk_size;    // result of the last effGetChunk
 static HWND     editor_wnd;
-static int      editor_open, ed_w, ed_h;
+static int      editor_open, ed_w, ed_h, ed_mode;   // ed_mode: 0 child of the host's window, VB_F_TOPLEVEL, VB_F_FLOATING
 static VstTimeInfo time_info[3];                // per channel: the plugin keeps the pointer until its next call
 static char     directory[VB_STR_MAX];
 
@@ -47,6 +56,12 @@ static void fill_info(void)
 
 // ----------------------------------------------------------------------------- channel plumbing
 
+static void sig_set(Sig* g)
+{
+    if (g->s != INVALID_SOCKET) { char b = 1; send(g->s, &b, 1, 0); }
+    else SetEvent(g->ev);
+}
+
 static int hwait(HANDLE ev, int pump)
 {
     for (;;) {
@@ -57,10 +72,10 @@ static int hwait(HANDLE ev, int pump)
     }
 }
 
-static HANDLE main_to_stub(void) { return sh->main.owner == VB_OWNER_HELPER ? ev_main_v : ev_main_s; }
+static Sig* main_to_stub(void) { return sh->main.owner == VB_OWNER_HELPER ? &sig_main_v : &sig_main_s; }
 
 // serves the request on top of ch and replies
-static void serve_top(VbChan* ch, int* active, HANDLE to)
+static void serve_top(VbChan* ch, int* active, Sig* to)
 {
     MemoryBarrier();
     if (ch->msg != VB_MSG_REQ || ch->depth < 1) return;
@@ -70,11 +85,11 @@ static void serve_top(VbChan* ch, int* active, HANDLE to)
     fill_info();
     MemoryBarrier();
     ch->msg = VB_MSG_REPLY;
-    SetEvent(to);
+    sig_set(to);
 }
 
 // one call to the bridge; serves its nested calls meanwhile
-static int hexchange(VbChan* ch, HANDLE to, HANDLE in, int pump, int* active, Req* r)
+static int hexchange(VbChan* ch, Sig* to, HANDLE in, int pump, int* active, Req* r)
 {
     int d = ch->depth;
     if (d >= VB_MAXDEPTH || r->in_len > VB_FRAME_DATA) return 0;
@@ -87,7 +102,7 @@ static int hexchange(VbChan* ch, HANDLE to, HANDLE in, int pump, int* active, Re
     MemoryBarrier();
     ch->msg = VB_MSG_REQ;
     (*active)++;
-    SetEvent(to);
+    sig_set(to);
     int ok = 1;
     for (;;) {
         if (!hwait(in, pump)) { ok = 0; break; }
@@ -106,6 +121,15 @@ static int hexchange(VbChan* ch, HANDLE to, HANDLE in, int pump, int* active, Re
 // main thread, outside a call: take the mutex; serve the bridge's calls while waiting for it
 static int lock_main(void)
 {
+    if (net) {                                  // the lock word in shared memory (contention is rare: poll it)
+        for (;;) {
+            if (InterlockedCompareExchange((volatile LONG*)&sh->main.lock, VB_OWNER_HELPER, 0) == 0) return 1;
+            DWORD r = MsgWaitForMultipleObjects(1, &ev_main_h, FALSE, 1, QS_SENDMESSAGE);
+            if (r == WAIT_OBJECT_0) serve_top(&sh->main, &main_active, main_to_stub());
+            else if (r == WAIT_OBJECT_0 + 1) { MSG m; PeekMessageW(&m, 0, 0, 0, PM_NOREMOVE); }
+            else if (r != WAIT_TIMEOUT) return 0;
+        }
+    }
     HANDLE w[2] = { mutex, ev_main_h };
     for (;;) {
         DWORD r = MsgWaitForMultipleObjects(2, w, FALSE, INFINITE, QS_SENDMESSAGE);
@@ -123,15 +147,15 @@ static int call_host(Req* r)
         if (main_active) return hexchange(&sh->main, main_to_stub(), ev_main_h, 1, &main_active, r);
         if (!lock_main()) return 0;
         sh->main.owner = VB_OWNER_HELPER;
-        int ok = hexchange(&sh->main, ev_main_v, ev_main_h, 1, &main_active, r);
+        int ok = hexchange(&sh->main, &sig_main_v, ev_main_h, 1, &main_active, r);
         sh->main.owner = VB_OWNER_NONE;
-        ReleaseMutex(mutex);
+        if (net) InterlockedExchange((volatile LONG*)&sh->main.lock, 0); else ReleaseMutex(mutex);
         return ok;
     }
-    if (me == audio_tid && audio_active) return hexchange(&sh->audio, ev_audio_s, ev_audio_h, 0, &audio_active, r);
+    if (me == audio_tid && audio_active) return hexchange(&sh->audio, &sig_audio_s, ev_audio_h, 0, &audio_active, r);
     EnterCriticalSection(&aux_cs);                                  // any other thread of the plugin
     int dummy = 0;
-    int ok = hexchange(&sh->aux, ev_aux_s, ev_aux_h, 0, &dummy, r);
+    int ok = hexchange(&sh->aux, &sig_aux_s, ev_aux_h, 0, &dummy, r);
     LeaveCriticalSection(&aux_cs);
     return ok;
 }
@@ -172,7 +196,9 @@ static intptr_t VSTCALL master(AEffect* e, int32_t op, int32_t idx, intptr_t val
         case audioMasterSizeWindow:
             if (editor_wnd && idx > 0 && val > 0) {
                 ed_w = idx; ed_h = (int)val;
-                SetWindowPos(editor_wnd, 0, 0, 0, ed_w, ed_h, SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+                RECT rc = { 0, 0, ed_w, ed_h };
+                if (ed_mode == VB_F_FLOATING) AdjustWindowRectEx(&rc, GetWindowLongW(editor_wnd, GWL_STYLE), FALSE, GetWindowLongW(editor_wnd, GWL_EXSTYLE));
+                SetWindowPos(editor_wnd, 0, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
             }
             return call_host(&r) ? (intptr_t)r.ret : 0;
         case audioMasterProcessEvents: {                            // MIDI out of the plugin
@@ -222,6 +248,7 @@ static intptr_t VSTCALL master(AEffect* e, int32_t op, int32_t idx, intptr_t val
 static LRESULT CALLBACK ed_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
 {
     if (m == WM_TIMER && fx && editor_open) { fx->dispatcher(fx, effEditIdle, 0, 0, 0, 0); return 0; }
+    if (m == WM_CLOSE && ed_mode == VB_F_FLOATING) { ShowWindow(w, SW_HIDE); sh->editor_closed = 1; return 0; }  // closing only hides it
     return DefWindowProcW(w, m, wp, lp);
 }
 
@@ -232,10 +259,12 @@ static void edit_rect(void)
     if (r && r->right > r->left && r->bottom > r->top) { ed_w = r->right - r->left; ed_h = r->bottom - r->top; }
 }
 
-static intptr_t edit_open(HWND parent)
+// mode 0: a child of the host's window (Windows); VB_F_TOPLEVEL: a bare popup with a known title that the Linux CLAP
+// moves into the host's X11 window; VB_F_FLOATING: a window of its own with a title bar (macOS, cannot be embedded)
+static intptr_t edit_open(HWND parent, int mode)
 {
     static int registered;
-    if (editor_open) return 1;
+    if (editor_open) { if (mode == VB_F_FLOATING && editor_wnd) { sh->editor_closed = 0; ShowWindow(editor_wnd, SW_SHOW); } return 1; }
     if (!(fx->flags & effFlagsHasEditor)) return 0;
     if (!registered) {
         WNDCLASSW wc; memset(&wc, 0, sizeof wc);
@@ -245,16 +274,34 @@ static intptr_t edit_open(HWND parent)
     }
     edit_rect();
     if (ed_w <= 0) { ed_w = 640; ed_h = 480; }
-    // a child of the host's window, although that window belongs to another process (Windows allows this)
-    editor_wnd = CreateWindowExW(0, L"VST2BridgeEditor", L"", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-                                 0, 0, ed_w, ed_h, parent, 0, GetModuleHandleW(0), 0);
+    ed_mode = mode;
+    if (mode == VB_F_FLOATING) {
+        char name[256]; memset(name, 0, sizeof name);
+        fx->dispatcher(fx, effGetEffectName, 0, 0, name, 0);
+        name[sizeof name - 1] = 0;
+        wchar_t wname[256];
+        if (!name[0] || !MultiByteToWideChar(CP_ACP, 0, name, -1, wname, 256)) wcscpy(wname, L"VST2Bridge");
+        DWORD st = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
+        RECT rc = { 0, 0, ed_w, ed_h };
+        AdjustWindowRectEx(&rc, st, FALSE, WS_EX_TOPMOST);
+        editor_wnd = CreateWindowExW(WS_EX_TOPMOST, L"VST2BridgeEditor", wname, st, CW_USEDEFAULT, CW_USEDEFAULT,
+                                     rc.right - rc.left, rc.bottom - rc.top, 0, 0, GetModuleHandleW(0), 0);
+    } else if (mode == VB_F_TOPLEVEL) {
+        wchar_t wt[64]; MultiByteToWideChar(CP_ACP, 0, title, -1, wt, 64);
+        editor_wnd = CreateWindowExW(WS_EX_TOOLWINDOW, L"VST2BridgeEditor", wt, WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                                     0, 0, ed_w, ed_h, 0, 0, GetModuleHandleW(0), 0);
+    } else    // a child of the host's window, although that window belongs to another process (Windows allows this)
+        editor_wnd = CreateWindowExW(0, L"VST2BridgeEditor", L"", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                                     0, 0, ed_w, ed_h, parent, 0, GetModuleHandleW(0), 0);
     if (!editor_wnd) return 0;
     intptr_t ret = fx->dispatcher(fx, effEditOpen, 0, 0, editor_wnd, 0);
     editor_open = 1;
     edit_rect();                                                    // some plugins know their size only once open
-    SetWindowPos(editor_wnd, 0, 0, 0, ed_w, ed_h, SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE);
+    RECT rc = { 0, 0, ed_w, ed_h };
+    if (mode == VB_F_FLOATING) AdjustWindowRectEx(&rc, GetWindowLongW(editor_wnd, GWL_STYLE), FALSE, GetWindowLongW(editor_wnd, GWL_EXSTYLE));
+    SetWindowPos(editor_wnd, 0, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE);
     SetTimer(editor_wnd, 1, 30, 0);
-    ShowWindow(editor_wnd, SW_SHOWNA);
+    ShowWindow(editor_wnd, mode == VB_F_FLOATING ? SW_SHOW : SW_SHOWNA);
     return ret ? ret : 1;
 }
 
@@ -265,6 +312,7 @@ static void edit_close(void)
     fx->dispatcher(fx, effEditClose, 0, 0, 0, 0);
     editor_open = 0;
     DestroyWindow(editor_wnd); editor_wnd = 0;
+    sh->editor_closed = 0;
 }
 
 // ----------------------------------------------------------------------------- host -> plugin
@@ -312,9 +360,28 @@ static void do_process(VbFrame* f)
     f->len = 0;
 }
 
+// the Linux file system is drive Z: under Wine
+static void wine_path(char* out, size_t n, const char* unix_path)
+{
+    snprintf(out, n, "Z:%s", unix_path);
+    for (char* q = out; *q; q++) if (*q == '/') *q = '\\';
+}
+
+static HANDLE map_file(const char* unix_path, DWORD size)
+{
+    char win[MAX_PATH + 8];
+    wine_path(win, sizeof win, unix_path);
+    HANDLE f = CreateFileA(win, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0, OPEN_EXISTING, 0, 0);
+    if (f == INVALID_HANDLE_VALUE) return 0;
+    HANDLE m = CreateFileMappingA(f, 0, PAGE_READWRITE, 0, size, 0);
+    CloseHandle(f);                                                 // the mapping keeps the file open
+    return m;
+}
+
+// a mapping for one large chunk: a named mapping (Windows) or a file of the Linux / macOS side (net:)
 static void* open_view(const char* name, HANDLE* m)
 {
-    *m = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, name);
+    *m = net ? map_file(name, 0) : OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, name);
     void* v = *m ? MapViewOfFile(*m, FILE_MAP_ALL_ACCESS, 0, 0, 0) : 0;
     if (*m && !v) { CloseHandle(*m); *m = 0; }
     return v;
@@ -355,7 +422,7 @@ static void do_dispatch(VbFrame* f)
             if (r) { memcpy(d, r, sizeof *r); f->len = sizeof *r; }
             break;
         }
-        case effEditOpen: ret = edit_open((HWND)(uintptr_t)(uint32_t)f->value); break;
+        case effEditOpen: ret = edit_open((HWND)(uintptr_t)(uint32_t)f->value, f->flags & (VB_F_TOPLEVEL | VB_F_FLOATING)); break;
         case effGetChunk: {
             void* cp = 0;
             ret = fx->dispatcher(fx, f->op, f->index, 0, &cp, 0);
@@ -417,6 +484,10 @@ static void serve_req(VbFrame* f)
         f->len = 0;
         break;
     }
+    case VB_K_EDITOR_SHOW:
+        if (editor_wnd) { if (f->index) sh->editor_closed = 0; ShowWindow(editor_wnd, f->index ? (ed_mode == VB_F_FLOATING ? SW_SHOW : SW_SHOWNA) : SW_HIDE); }
+        f->ret = editor_wnd != 0; f->len = 0;
+        break;
     case VB_K_QUIT: InterlockedExchange(&quitting, 1); f->ret = 1; f->len = 0; break;
     default: f->ret = 0; f->len = 0; break;
     }
@@ -429,7 +500,7 @@ static DWORD WINAPI audio_thread(LPVOID a)
     (void)a;
     audio_tid = GetCurrentThreadId();
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
-    while (hwait(ev_audio_h, 0) && !quitting) serve_top(&sh->audio, &audio_active, ev_audio_s);
+    while (hwait(ev_audio_h, 0) && !quitting) serve_top(&sh->audio, &audio_active, &sig_audio_s);
     return 0;
 }
 
@@ -445,7 +516,59 @@ static void fail(const char* msg)
 {
     snprintf(sh->error, sizeof sh->error, "%s", msg);
     sh->ok = 0;
-    SetEvent(ev_ready);
+    sig_set(&sig_ready);
+}
+
+// net: one reader per connection turns the bridge's bytes into a local event; the bridge is gone when it closes
+typedef struct { SOCKET s; HANDLE ev; } Reader;
+static DWORD WINAPI reader(LPVOID a)
+{
+    Reader* r = (Reader*)a; char b[64];
+    for (;;) {
+        int n = recv(r->s, b, sizeof b, 0);
+        if (n <= 0) ExitProcess(0);                                 // the host has ended (or crashed)
+        SetEvent(r->ev);                                            // one signal at a time: the protocol never sends two
+    }
+    return 0;
+}
+
+static SOCKET connect_to(int port, const char* token, char kind)
+{
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) return s;
+    struct sockaddr_in a; memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET; a.sin_port = htons((u_short)port); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(s, (struct sockaddr*)&a, sizeof a) != 0) { closesocket(s); return INVALID_SOCKET; }
+    int one = 1; setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char*)&one, sizeof one);
+    char hello[48]; snprintf(hello, sizeof hello, "%.16s%c", token, kind);   // the token proves the connection is ours
+    send(s, hello, (int)strlen(hello), 0);
+    return s;
+}
+
+static HANDLE start_reader(SOCKET s)
+{
+    Reader* r = (Reader*)calloc(1, sizeof *r);
+    r->s = s; r->ev = CreateEventA(0, FALSE, FALSE, 0);
+    CreateThread(0, 0, reader, r, 0, 0);
+    return r->ev;
+}
+
+// net:<port>:<token>:<shared file>
+static int open_net(char* arg, HANDLE* map)
+{
+    char* port = arg + 4; char* token = strchr(port, ':'); if (!token) return 0; *token++ = 0;
+    char* file = strchr(token, ':'); if (!file) return 0; *file++ = 0;
+    snprintf(title, sizeof title, "VST2Bridge %.16s", token);
+    WSADATA wd; if (WSAStartup(MAKEWORD(2, 2), &wd) != 0) return 0;
+    int pn = atoi(port);
+    SOCKET sm = connect_to(pn, token, 'M'), sv = connect_to(pn, token, 'V'), sa = connect_to(pn, token, 'A'), sx = connect_to(pn, token, 'X');
+    if (sm == INVALID_SOCKET || sv == INVALID_SOCKET || sa == INVALID_SOCKET || sx == INVALID_SOCKET) return 0;
+    sig_ready.s = sm; sig_main_s.s = sm; sig_main_v.s = sv; sig_audio_s.s = sa; sig_aux_s.s = sx;
+    *map = map_file(file, (DWORD)sizeof(VbShared));
+    if (!*map) return 0;
+    ev_main_h = start_reader(sm); ev_audio_h = start_reader(sa); ev_aux_h = start_reader(sx);
+    start_reader(sv);                                               // nothing comes this way; it notices a closed connection
+    return 1;
 }
 
 static HANDLE open_obj(const char* prefix, const char* suffix, int kind)
@@ -464,22 +587,30 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show)
     (void)hi; (void)hp; (void)cmd; (void)show;
     int argc; LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (!argv || argc < 5) return 2;
-    char prefix[128];
-    WideCharToMultiByte(CP_ACP, 0, argv[2], -1, prefix, sizeof prefix, 0, 0);
+    char prefix[1024];
+    WideCharToMultiByte(CP_UTF8, 0, argv[2], -1, prefix, sizeof prefix, 0, 0);
     shell_id = (int32_t)wcstol(argv[3], 0, 10);
     DWORD host_pid = (DWORD)wcstoul(argv[4], 0, 10);
 
-    HANDLE map = open_obj(prefix, VB_OBJ_MAP, 2);
-    ev_ready = open_obj(prefix, VB_OBJ_READY, 0); mutex = open_obj(prefix, VB_OBJ_MUTEX, 1);
-    ev_main_h = open_obj(prefix, VB_OBJ_MAIN_H, 0); ev_main_s = open_obj(prefix, VB_OBJ_MAIN_S, 0); ev_main_v = open_obj(prefix, VB_OBJ_MAIN_V, 0);
-    ev_audio_h = open_obj(prefix, VB_OBJ_AUDIO_H, 0); ev_audio_s = open_obj(prefix, VB_OBJ_AUDIO_S, 0);
-    ev_aux_h = open_obj(prefix, VB_OBJ_AUX_H, 0); ev_aux_s = open_obj(prefix, VB_OBJ_AUX_S, 0);
-    if (!map || !ev_ready || !mutex || !ev_main_h || !ev_main_s || !ev_main_v || !ev_audio_h || !ev_audio_s || !ev_aux_h || !ev_aux_s) return 3;
+    Sig* outs[] = { &sig_ready, &sig_main_s, &sig_main_v, &sig_audio_s, &sig_aux_s };
+    for (size_t i = 0; i < sizeof outs / sizeof *outs; i++) { outs[i]->ev = 0; outs[i]->s = INVALID_SOCKET; }
+    HANDLE map = 0;
+    if (!strncmp(prefix, "net:", 4)) {
+        net = 1;
+        if (!open_net(prefix, &map)) return 3;
+    } else {
+        map = open_obj(prefix, VB_OBJ_MAP, 2);
+        sig_ready.ev = open_obj(prefix, VB_OBJ_READY, 0); mutex = open_obj(prefix, VB_OBJ_MUTEX, 1);
+        ev_main_h = open_obj(prefix, VB_OBJ_MAIN_H, 0); sig_main_s.ev = open_obj(prefix, VB_OBJ_MAIN_S, 0); sig_main_v.ev = open_obj(prefix, VB_OBJ_MAIN_V, 0);
+        ev_audio_h = open_obj(prefix, VB_OBJ_AUDIO_H, 0); sig_audio_s.ev = open_obj(prefix, VB_OBJ_AUDIO_S, 0);
+        ev_aux_h = open_obj(prefix, VB_OBJ_AUX_H, 0); sig_aux_s.ev = open_obj(prefix, VB_OBJ_AUX_S, 0);
+        if (!map || !sig_ready.ev || !mutex || !ev_main_h || !sig_main_s.ev || !sig_main_v.ev || !ev_audio_h || !sig_audio_s.ev || !ev_aux_h || !sig_aux_s.ev) return 3;
+    }
     sh = (VbShared*)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0);
     if (!sh || sh->magic != VB_MAGIC || sh->version != VB_VERSION) return 3;
     InitializeCriticalSection(&aux_cs);
     main_tid = GetCurrentThreadId();
-    HANDLE hp_ = OpenProcess(SYNCHRONIZE, FALSE, host_pid);
+    HANDLE hp_ = host_pid ? OpenProcess(SYNCHRONIZE, FALSE, host_pid) : 0;     // net: the closed connections tell instead
     if (hp_) CreateThread(0, 0, watchdog, hp_, 0, 0);
 
     // the plugin finds its files next to itself (the bridge also starts the helper in the plugin's folder)
@@ -493,7 +624,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show)
     fill_info();
     sh->ok = 1;
     HANDLE at = CreateThread(0, 0, audio_thread, 0, 0, 0);
-    SetEvent(ev_ready);
+    sig_set(&sig_ready);
 
     while (!quitting) {
         DWORD r = MsgWaitForMultipleObjects(1, &ev_main_h, FALSE, INFINITE, QS_ALLINPUT);

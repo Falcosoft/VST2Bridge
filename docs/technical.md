@@ -12,6 +12,8 @@
 | `<name>_x86.clap` | `bridge/clap.c` (32-bit, `vst2bridge-x86.clap`) | CLAP plugin for 32-bit hosts; loads `<name>_x86.dll` |
 | `vst2bridge-host32.exe` | `bridge/host.c` (32-bit) | Helper that runs a 32-bit plugin |
 | `vst2bridge-host64.exe` | `bridge/host.c` (64-bit) | Helper that runs a 64-bit plugin |
+| `<name>.clap` (Linux) | `bridge/clap.c` + `bridge/stub.c` (x86-64, `vst2bridge-linux.clap`) | CLAP plugin; runs `<name>.dll` (32 or 64-bit) in the helper of its bitness under Wine |
+| `<name>.clap/` (macOS bundle) | `bridge/clap.c` + `bridge/stub.c` (universal, `vst2bridge-macos`) | The same for macOS: `<name>.clap/Contents/MacOS/<name>`, `Info.plist`, signed ad hoc |
 
 All bridge DLLs of one bitness are the same file; the bridge takes the plugin from its own name: it removes `.dll` and the suffix `_x64` (64-bit bridge) or `_x86` (32-bit bridge) and loads `<name>.dll` from its own folder. The helper must be in the same folder. The bridge exports `VSTPluginMain`, `main` (old hosts) and the marker `VST2BridgeStub`, by which the patcher recognises its own files (it also skips JBridge's files, which export `JBridgeBootstrap`).
 
@@ -32,6 +34,24 @@ The CLAP bridge (`bridge/clap.c`) is a VST2 host in a CLAP plugin: it loads the 
 | Latency | `initialDelay`, read after `effMainsChanged`; a change while active (`audioMasterIOChanged`) asks the host for a restart |
 | GUI | Win32, embedded: `effEditGetRect`, `effEditOpen` with the host's window, `effEditClose`; `audioMasterSizeWindow` → `gui.request_resize`. Not resizable by the host. |
 
+## Linux and macOS
+
+The Linux / macOS CLAP is `clap.c` and `stub.c` linked into one native file (`make -C bridge linux` / `macos`), so the CLAP side and the whole protocol are the code of the Windows bridges; `bridge/plat.h` covers the differences (locks, thread ids, atomics). Instead of loading a VST2 DLL, `clap.c` calls the bridge directly (`vb_stub_main`). The file takes the plugin from its own name: `foo.clap` → `foo.dll` in the same folder (no suffix is removed; on macOS the host may pass the bundle or the binary inside it). The bitness of the DLL (PE header) decides the helper.
+
+The helper is the same Windows program, started under Wine:
+
+```
+wine vst2bridge-hostNN.exe Z:\path\foo.dll net:<port>:<token>:<shared file> <shell id> 0
+```
+
+- **Shared memory** is a file (Linux `/dev/shm`, macOS `$TMPDIR`) of the size of `VbShared`, mapped by both sides (Wine sees `/` as drive `Z:`); it is deleted as soon as both have it open. Chunks above 64 KB use files of their own in the same folder.
+- **Signals:** the helper connects four times to a loopback TCP port the CLAP opened (`M`, `V`, `A`, `X`, each with a random token); each named event becomes one byte on one of them (see `protocol.h`). In the helper a reader thread per connection turns the bytes back into local events, so its waits, message pumping and nesting stay as they are. A closed connection ends the helper (the host is gone); in the CLAP it marks the helper as dead.
+- **Mutex:** the main channel's named mutex becomes the lock word `VbChan.lock` in shared memory (compare-and-swap on both sides; contention is rare, waiting polls every 0.2 / 1 ms).
+- **audioMasterSizeWindow** from the plugin's GUI goes straight to the CLAP side (`gui.request_resize` may be called from any thread), not through an editor thread as on Windows.
+- **Editor, Linux:** `effEditOpen` with the flag `VB_F_TOPLEVEL`: the helper opens the editor in a bare popup titled `VST2Bridge <token>`; the CLAP finds that X11 window by its title and moves it into the host's window (`XReparentWindow`, via xcb). A CLAP timer (100 ms) tells Wine where the window is on the screen, so mouse clicks hit when the host's window moves.
+- **Editor, macOS:** a window of another process cannot be embedded, so the CLAP offers a floating GUI (`cocoa`, floating): `show` opens the editor in a window of its own with a title bar (always on top, named after the plugin) or shows it again (`VB_K_EDITOR_SHOW`), `hide` hides it; closing it by hand only hides it, sets `VbShared.editor_closed`, and a timer (250 ms) tells the host (`gui.closed`). Its size follows the plugin's `sizeWindow`.
+- **Wine:** `VB_WINE`, then (macOS) the usual install folders, then `wine` in the path; `WINEDEBUG=-all` unless set; `VB_DEBUG=1` keeps Wine's output. The helper runs in the plugin's folder. Failures go to `vst2bridge.log` in `$TMPDIR` or `/tmp`.
+
 ## Start
 
 `VSTPluginMain` of the bridge creates one shared-memory block and a set of named events and a mutex (`Local\V2B<host pid>_<n>_*`), asks the host for `audioMasterCurrentId` (shell plugins), and starts the helper in the plugin's folder:
@@ -40,7 +60,7 @@ The CLAP bridge (`bridge/clap.c`) is a VST2 host in a CLAP plugin: it loads the 
 vst2bridge-hostNN.exe <plugin.dll> <object prefix> <shell id> <host pid>
 ```
 
-The helper loads the plugin, calls its `VSTPluginMain`, writes the plugin's `AEffect` fields (`numInputs`, `flags`, `uniqueID` ...) into shared memory and signals "ready". The bridge copies those fields into its own `AEffect` and returns it to the host. The helper is put into a job object that ends it with the host, and it also watches the host process itself.
+The helper loads the plugin, calls its `VSTPluginMain`, writes the plugin's `AEffect` fields (`numInputs`, `flags`, `uniqueID` ...) into shared memory and signals "ready". The bridge copies those fields into its own `AEffect` and returns it to the host. The helper is put into a job object that ends it with the host, and it also watches the host process itself (Linux / macOS: it ends when its connections close).
 
 If anything fails, `VSTPluginMain` returns NULL (the host reports that the plugin cannot be loaded) and the reason goes to `%TEMP%\vst2bridge.log`.
 

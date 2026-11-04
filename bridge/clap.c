@@ -1,34 +1,74 @@
-// clap.c - CLAP plugin around the VST2 bridge next to it (VST2 inside, CLAP outside, same bitness).
-//   64-bit: copied as <plugin>_x64.clap next to a 32-bit plugin; loads <plugin>_x64.dll (vst2bridge-x64.dll)
-//   32-bit: copied as <plugin>_x86.clap next to a 64-bit plugin; loads <plugin>_x86.dll (vst2bridge-x86.dll)
-// All .clap files of one bitness are the same file: it loads the VST2 DLL that has its own name (foo_x64.clap ->
-// foo_x64.dll in the same folder), so the process boundary, the helper and everything the VST2 bridge passes are
-// reused unchanged. This file only translates CLAP calls into VST2 calls in-process. See docs/technical.md.
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+// clap.c - CLAP plugin around the VST2 bridge (VST2 inside, CLAP outside). This file only translates CLAP calls
+// into VST2 calls in-process; the bridge (stub.c) does the rest. See docs/technical.md.
+//   Windows 64-bit: copied as <plugin>_x64.clap next to a 32-bit plugin; loads <plugin>_x64.dll (vst2bridge-x64.dll)
+//   Windows 32-bit: copied as <plugin>_x86.clap next to a 64-bit plugin; loads <plugin>_x86.dll (vst2bridge-x86.dll)
+//     All .clap files of one bitness are the same file: it loads the VST2 DLL that has its own name (foo_x64.clap ->
+//     foo_x64.dll in the same folder), so the process boundary, the helper and everything the VST2 bridge passes are
+//     reused unchanged.
+//   Linux / macOS: stub.c is linked in (vst2bridge-linux.clap, vst2bridge-macos); copied as <plugin>.clap next to
+//     <plugin>.dll (macOS: a bundle <plugin>.clap/Contents/MacOS/<plugin>), it runs the plugin (32 or 64-bit) in
+//     the helper of its bitness under Wine. Editor: Linux moves the helper's window into the host's X11 window,
+//     macOS shows it as a floating window (a window of another process cannot be embedded there).
+#ifndef _WIN32
+#define _GNU_SOURCE
+#endif
+#include "plat.h"
 #include <wchar.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#ifndef _WIN32
+#include <limits.h>
+#include <unistd.h>
+#if !defined(__APPLE__) && !defined(VB_FLOATING_GUI)
+#include <xcb/xcb.h>
+#endif
+#endif
 #include "clap/clap.h"
 #include "vst2.h"
+#include "protocol.h"
+
+// the editor: embedded win32 child (Windows), helper window moved into the host's X11 window (Linux), floating
+// window (macOS; VB_FLOATING_GUI builds that variant on Linux for the tests)
+#if defined(_WIN32)
+#define VB_GUI_WIN32
+#elif defined(__APPLE__) || defined(VB_FLOATING_GUI)
+#define VB_GUI_FLOATING
+#else
+#define VB_GUI_X11
+#endif
 
 #define VBC_MAGIC     0x4C434256u         // 'VBCL': state saved by the CLAP bridge
 #define VBC_MAXEV     1024                // events given to the plugin per block (more are dropped)
 #define VBC_QUEUE     512                 // parameter changes / gestures from the plugin waiting for the host
 #define VBC_SYSEX_OUT 65536               // SysEx bytes out of the plugin per block
 
-static wchar_t g_dll[MAX_PATH], g_self_name[MAX_PATH];
 static char    g_stem8[256], g_id[320], g_name[256], g_vendor[256], g_version[32], g_descr[400];
 static const char* g_features[4];
 static clap_plugin_descriptor_t g_desc;
-static CRITICAL_SECTION g_lock;
 static int g_inits, g_probed, g_ok;
+#ifdef _WIN32
+static wchar_t g_dll[MAX_PATH], g_self_name[MAX_PATH];
+static CRITICAL_SECTION g_lock;
 static INIT_ONCE g_once = INIT_ONCE_STATIC_INIT;
 static BOOL CALLBACK init_lock(PINIT_ONCE o, PVOID a, PVOID* c) { (void)o; (void)a; (void)c; InitializeCriticalSection(&g_lock); return TRUE; }
+static void glock(void) { EnterCriticalSection(&g_lock); }
+static void gunlock(void) { LeaveCriticalSection(&g_lock); }
 static HMODULE g_mod;
 static AEffect* (VSTCALL *g_entry)(AudioMasterCallback);
+#else
+static char g_dir[PATH_MAX], g_stem[256];
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+static void glock(void) { pthread_mutex_lock(&g_lock); }
+static void gunlock(void) { pthread_mutex_unlock(&g_lock); }
+// stub.c, linked in
+AEffect* vb_stub_main(AudioMasterCallback master, const char* dir, const char* stem);
+intptr_t vb_stub_edit_open(AEffect* fx, int mode);
+int vb_stub_edit_show(AEffect* fx, int show);
+int vb_stub_edit_closed(AEffect* fx);
+const char* vb_stub_token(AEffect* fx);
+#endif
 
 typedef struct { int kind; int32_t index; float value; } QEv;      // kind: 0 value, 1 gesture begin, 2 gesture end
 
@@ -48,12 +88,20 @@ typedef struct Inst {
     uint32_t maxf;
     float** vin; float** vout; float* bufs;   // channel pointer arrays and the spare channel buffers
     VstTimeInfo ti;
-    volatile DWORD proc_tid, set_tid;         // thread inside process / thread that is setting parameters
+    volatile vb_tid proc_tid, set_tid;        // thread inside process / thread that is setting parameters
     const clap_output_events_t* cur_out;
     uint32_t cur_frames, sysex_used;
     uint8_t sysex_out[VBC_SYSEX_OUT];
-    SRWLOCK qlock; QEv q[VBC_QUEUE]; int qn;
-    volatile LONG want_reset, want_rescan, io_changed;
+    vb_mutex qlock; QEv q[VBC_QUEUE]; int qn;
+    volatile int32_t want_reset, want_rescan, io_changed;
+#ifndef _WIN32
+    clap_id timer;                            // Linux: tells Wine where the window is; macOS: notices a closed window
+#endif
+#ifdef VB_GUI_X11
+    xcb_connection_t* xc;
+    xcb_window_t xparent, xchild, xroot;
+    int last_x, last_y;
+#endif
     char error[256];
 } Inst;
 
@@ -63,12 +111,20 @@ static __thread Inst* t_creating;            // the instance whose VSTPluginMain
 
 static void log_to_file(const char* m)
 {
+#ifdef _WIN32
     wchar_t t[MAX_PATH]; char f[MAX_PATH * 3];
     DWORD n = GetTempPathW(MAX_PATH, t);
     if (!n || n >= MAX_PATH) wcscpy(t, L"C:\\Windows\\Temp\\");
     snprintf(f, sizeof f, "%lsvst2bridge.log", t);
     FILE* fp = fopen(f, "a");
     if (fp) { fprintf(fp, "%ls: %s\n", g_self_name, m); fclose(fp); }
+#else
+    const char* t = getenv("TMPDIR");
+    char f[PATH_MAX];
+    snprintf(f, sizeof f, "%s/vst2bridge.log", t && *t ? t : "/tmp");
+    FILE* fp = fopen(f, "a");
+    if (fp) { fprintf(fp, "%s.clap: %s\n", g_stem, m); fclose(fp); }
+#endif
 }
 
 static void log_error(Inst* p, const char* m)
@@ -88,7 +144,7 @@ static intptr_t disp(Inst* p, int32_t op, int32_t idx, intptr_t val, void* ptr, 
 static void set_param(Inst* p, int32_t i, float v)
 {
     if (!p->fx || i < 0 || i >= p->fx->numParams) return;
-    DWORD me = GetCurrentThreadId(), was = p->set_tid;
+    vb_tid me = vb_self(), was = p->set_tid;
     p->set_tid = me;                          // the plugin's audioMasterAutomate for this change is not sent back
     p->fx->setParameter(p->fx, i, v);
     p->set_tid = was;
@@ -98,9 +154,9 @@ static int can_do(Inst* p, const char* what) { return disp(p, effCanDo, 0, 0, (v
 
 static void queue_push(Inst* p, int kind, int32_t index, float value)
 {
-    AcquireSRWLockExclusive(&p->qlock);
+    vb_lock(&p->qlock);
     if (p->qn < VBC_QUEUE) { QEv* e = &p->q[p->qn++]; e->kind = kind; e->index = index; e->value = value; }
-    ReleaseSRWLockExclusive(&p->qlock);
+    vb_unlock(&p->qlock);
 }
 
 static void push_param_event(const clap_output_events_t* out, int kind, int32_t index, float value, uint32_t time)
@@ -123,9 +179,9 @@ static void push_param_event(const clap_output_events_t* out, int kind, int32_t 
 static void queue_drain(Inst* p, const clap_output_events_t* out)
 {
     QEv tmp[VBC_QUEUE]; int n;
-    AcquireSRWLockExclusive(&p->qlock);
+    vb_lock(&p->qlock);
     n = p->qn; memcpy(tmp, p->q, n * sizeof *tmp); p->qn = 0;
-    ReleaseSRWLockExclusive(&p->qlock);
+    vb_unlock(&p->qlock);
     if (out) for (int i = 0; i < n; i++) push_param_event(out, tmp[i].kind, tmp[i].index, tmp[i].value, 0);
 }
 
@@ -168,7 +224,7 @@ static void midi_out(Inst* p, const VstEvents* evs)
 static intptr_t VSTCALL master(AEffect* e, int32_t op, int32_t idx, intptr_t val, void* ptr, float opt)
 {
     Inst* p = e && e->resvd1 ? (Inst*)e->resvd1 : t_creating;
-    DWORD me = GetCurrentThreadId();
+    vb_tid me = vb_self();
     (void)val;
     switch (op) {
     case audioMasterVersion: return 2400;
@@ -207,21 +263,24 @@ static intptr_t VSTCALL master(AEffect* e, int32_t op, int32_t idx, intptr_t val
     case audioMasterSizeWindow:
         if (!p) return 0;
         p->gui_w = idx; p->gui_h = (int)val;
+#ifndef VB_GUI_FLOATING                       // a floating window is sized by the helper itself
         if (p->gui_open && p->hgui && p->hgui->request_resize) p->hgui->request_resize(p->host, (uint32_t)idx, (uint32_t)val);
+#endif
         return 1;
     case audioMasterIOChanged:
-        if (p && p->host) { InterlockedExchange(&p->io_changed, 1); p->host->request_callback(p->host); }
+        if (p && p->host) { vb_xchg(&p->io_changed, 1); p->host->request_callback(p->host); }
         return 1;
     case audioMasterUpdateDisplay:
-        if (p && p->host) { InterlockedExchange(&p->want_rescan, 1); p->host->request_callback(p->host); }
+        if (p && p->host) { vb_xchg(&p->want_rescan, 1); p->host->request_callback(p->host); }
         return 1;
     default: return 0;
     }
 }
 
+#ifdef _WIN32
 static int load_module(char* err, size_t n)
 {
-    EnterCriticalSection(&g_lock);
+    glock();
     if (!g_mod) {
         g_mod = LoadLibraryW(g_dll);
         if (!g_mod) snprintf(err, n, "cannot load %ls (error %lu)", g_dll, GetLastError());
@@ -232,15 +291,19 @@ static int load_module(char* err, size_t n)
         }
     }
     int ok = g_mod != 0;
-    LeaveCriticalSection(&g_lock);
+    gunlock();
     return ok;
 }
+#endif
 
 static Inst* inst_alloc(void)
 {
     Inst* p = (Inst*)calloc(1, sizeof *p);
     if (!p) return 0;
-    InitializeSRWLock(&p->qlock);
+    vb_mutex_init(&p->qlock);
+#ifndef _WIN32
+    p->timer = CLAP_INVALID_ID;
+#endif
     p->rate = 44100; p->maxf = 512;
     p->ti.sampleRate = 44100; p->ti.tempo = 120; p->ti.timeSigNumerator = 4; p->ti.timeSigDenominator = 4;
     p->ti.flags = (1 << 10) | (1 << 13);     // kVstTempoValid | kVstTimeSigValid
@@ -250,6 +313,7 @@ static Inst* inst_alloc(void)
 // creates the VST2 plugin (through the bridge, which starts the helper)
 static int inst_load(Inst* p)
 {
+#ifdef _WIN32
     if (!load_module(p->error, sizeof p->error)) return 0;
     t_creating = p;
     AEffect* fx = g_entry(master);
@@ -258,6 +322,12 @@ static int inst_load(Inst* p)
         snprintf(p->error, sizeof p->error, "%ls did not create the plugin (see the lines above in this log)", g_dll);
         return 0;
     }
+#else
+    t_creating = p;
+    AEffect* fx = vb_stub_main(master, g_dir, g_stem);
+    t_creating = 0;
+    if (!fx) { snprintf(p->error, sizeof p->error, "the plugin could not be started (see the line above in this log)"); return 0; }
+#endif
     fx->resvd1 = (intptr_t)p;                 // resvd1 belongs to the host: the way back from the callback to us
     p->fx = fx;
     disp(p, effOpen, 0, 0, 0, 0);
@@ -272,14 +342,18 @@ static int inst_load(Inst* p)
     return 1;
 }
 
+static void gui_release(Inst* p);
+
 static void inst_free(Inst* p)
 {
+    gui_release(p);
     if (p->fx) {
         if (p->gui_open) disp(p, effEditClose, 0, 0, 0, 0);
         if (p->active) disp(p, effMainsChanged, 0, 0, 0, 0);
         disp(p, effClose, 0, 0, 0, 0);
     }
     free(p->defaults); free(p->vin); free(p->vout); free(p->bufs);
+    vb_mutex_free(&p->qlock);
     free(p);
 }
 
@@ -291,10 +365,10 @@ static void copy_str(char* dst, size_t n, const char* src) { snprintf(dst, n, "%
 
 static void probe(void)
 {
-    EnterCriticalSection(&g_lock);
-    if (g_probed) { LeaveCriticalSection(&g_lock); return; }
+    glock();
+    if (g_probed) { gunlock(); return; }
     g_probed = 1;
-    LeaveCriticalSection(&g_lock);
+    gunlock();
 
     Inst* p = inst_alloc();
     if (!p) return;
@@ -307,7 +381,11 @@ static void probe(void)
     copy_str(g_vendor, sizeof g_vendor, s[0] ? s : "VST2Bridge");
     int v = (int)disp(p, effGetVendorVersion, 0, 0, 0, 0);
     if (v > 0) snprintf(g_version, sizeof g_version, "%d", v); else copy_str(g_version, sizeof g_version, "1.0");
+#ifdef _WIN32
     snprintf(g_descr, sizeof g_descr, "%s (VST2 plugin of the other bitness, bridged by VST2Bridge)", g_name);
+#else
+    snprintf(g_descr, sizeof g_descr, "%s (Windows VST2 plugin, run under Wine by VST2Bridge)", g_name);
+#endif
     int n = 0;
     if (p->fx->flags & effFlagsIsSynth) { g_features[n++] = CLAP_PLUGIN_FEATURE_INSTRUMENT; g_features[n++] = CLAP_PLUGIN_FEATURE_SYNTHESIZER; }
     else g_features[n++] = CLAP_PLUGIN_FEATURE_AUDIO_EFFECT;
@@ -320,9 +398,9 @@ static void probe(void)
     g_desc.url = "https://github.com/NightFright2k19/VST2Bridge";
     g_desc.manual_url = g_desc.url; g_desc.support_url = g_desc.url;
     g_desc.version = g_version; g_desc.description = g_descr; g_desc.features = g_features;
-    EnterCriticalSection(&g_lock);
+    glock();
     g_spare = p; g_ok = 1;
-    LeaveCriticalSection(&g_lock);
+    gunlock();
 }
 
 // ----------------------------------------------------------------------------- plugin
@@ -366,7 +444,7 @@ static bool pl_activate(const clap_plugin_t* c, double sr, uint32_t minf, uint32
     p->nin = nin; p->nout = nout;
     uint32_t lat = p->fx->initialDelay > 0 ? (uint32_t)p->fx->initialDelay : 0;
     if (lat != p->latency) { p->latency = lat; if (p->hlat && p->hlat->changed) p->hlat->changed(p->host); }
-    InterlockedExchange(&p->io_changed, 0);
+    vb_xchg(&p->io_changed, 0);
     p->active = 1;
     return true;
 }
@@ -381,7 +459,7 @@ static void pl_deactivate(const clap_plugin_t* c)
 
 static bool pl_start(const clap_plugin_t* c) { Inst* p = INST(c); disp(p, effStartProcess, 0, 0, 0, 0); p->processing = 1; return true; }
 static void pl_stop(const clap_plugin_t* c) { Inst* p = INST(c); disp(p, effStopProcess, 0, 0, 0, 0); p->processing = 0; }
-static void pl_reset(const clap_plugin_t* c) { InterlockedExchange(&INST(c)->want_reset, 1); }
+static void pl_reset(const clap_plugin_t* c) { vb_xchg(&INST(c)->want_reset, 1); }
 
 static void set_transport(Inst* p, const clap_event_transport_t* t)
 {
@@ -442,11 +520,11 @@ static clap_process_status pl_process(const clap_plugin_t* c, const clap_process
     static __thread VstMidiEvent mev[VBC_MAXEV];
     static __thread VstMidiSysexEvent sev[VBC_MAXEV];
     static __thread EvList list;
-    p->proc_tid = GetCurrentThreadId(); p->cur_out = pr->out_events; p->cur_frames = frames; p->sysex_used = 0;
+    p->proc_tid = vb_self(); p->cur_out = pr->out_events; p->cur_frames = frames; p->sysex_used = 0;
     if (pr->transport) set_transport(p, pr->transport);
 
     list.numEvents = 0;
-    if (InterlockedExchange(&p->want_reset, 0))                    // all notes off, reset controllers
+    if (vb_xchg(&p->want_reset, 0))                    // all notes off, reset controllers
         for (int ch = 0; ch < 16; ch++) { add_midi(mev, &list, 0, 0xB0 | ch, 123, 0); add_midi(mev, &list, 0, 0xB0 | ch, 121, 0); }
     uint32_t ne = pr->in_events ? pr->in_events->size(pr->in_events) : 0;
     for (uint32_t i = 0; i < ne; i++) {
@@ -521,9 +599,9 @@ static void pl_on_main(const clap_plugin_t* c)
 {
     Inst* p = INST(c);
     if (!p->fx) return;
-    if (InterlockedExchange(&p->want_rescan, 0) && p->hparams && p->hparams->rescan)
+    if (vb_xchg(&p->want_rescan, 0) && p->hparams && p->hparams->rescan)
         p->hparams->rescan(p->host, CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT);
-    if (InterlockedExchange(&p->io_changed, 0)) {
+    if (vb_xchg(&p->io_changed, 0)) {
         int pin = (p->fx->numInputs + 1) / 2, pout = (p->fx->numOutputs + 1) / 2;
         uint32_t lat = p->fx->initialDelay > 0 ? (uint32_t)p->fx->initialDelay : 0;
         if (p->active) { if (lat != p->latency || pin > p->ports_in || pout > p->ports_out) p->host->request_restart(p->host); }
@@ -669,7 +747,7 @@ static bool st_load(const clap_plugin_t* c, const clap_istream_t* s)
     uint8_t* data = (uint8_t*)malloc(hdr[4] + 1);
     if (!data) return false;
     if (!read_all(s, data, hdr[4])) { free(data); return false; }
-    DWORD was = p->set_tid; p->set_tid = GetCurrentThreadId();     // changes made by loading are not sent back
+    vb_tid was = p->set_tid; p->set_tid = vb_self();     // changes made by loading are not sent back
     if (hdr[2] == 1) {
         disp(p, effBeginSetProgram, 0, 0, 0, 0);
         disp(p, effSetChunk, 0, (intptr_t)hdr[4], data, 0);
@@ -692,7 +770,7 @@ static const clap_plugin_state_t ext_state = { st_save, st_load };
 static uint32_t lat_get(const clap_plugin_t* c) { return INST(c)->latency; }
 static const clap_plugin_latency_t ext_latency = { lat_get };
 
-// ----------------------------------------------------------------------------- editor (embedded Win32 window)
+// ----------------------------------------------------------------------------- editor
 
 static void read_rect(Inst* p)
 {
@@ -700,6 +778,10 @@ static void read_rect(Inst* p)
     disp(p, effEditGetRect, 0, 0, &r, 0);
     if (r && r->right > r->left && r->bottom > r->top) { p->gui_w = r->right - r->left; p->gui_h = r->bottom - r->top; }
 }
+
+#ifdef VB_GUI_WIN32
+// embedded Win32 window
+static void gui_release(Inst* p) { (void)p; }
 static bool gui_supported(const clap_plugin_t* c, const char* api, bool floating)
 {
     Inst* p = INST(c);
@@ -759,6 +841,210 @@ static const clap_plugin_gui_t ext_gui = {
     gui_adjust, gui_set_size, gui_set_parent, gui_transient, gui_title, gui_show, gui_hide
 };
 
+#else
+// Linux / macOS: the editor is a window of the helper (Wine)
+
+static const clap_host_timer_support_t* host_timer(Inst* p)
+{
+    return p->host && p->host->get_extension ? (const clap_host_timer_support_t*)p->host->get_extension(p->host, CLAP_EXT_TIMER_SUPPORT) : 0;
+}
+static void timer_start(Inst* p, uint32_t ms)
+{
+    const clap_host_timer_support_t* ts = host_timer(p);
+    if (p->timer == CLAP_INVALID_ID && ts && ts->register_timer) ts->register_timer(p->host, ms, &p->timer);
+}
+static void timer_stop(Inst* p)
+{
+    const clap_host_timer_support_t* ts = p->timer != CLAP_INVALID_ID ? host_timer(p) : 0;
+    if (ts && ts->unregister_timer) ts->unregister_timer(p->host, p->timer);
+    p->timer = CLAP_INVALID_ID;
+}
+#ifdef VB_GUI_FLOATING
+#define GUI_API      CLAP_WINDOW_API_COCOA
+#define GUI_FLOATING true
+#else
+#define GUI_API      CLAP_WINDOW_API_X11
+#define GUI_FLOATING false
+#endif
+
+static bool gui_supported(const clap_plugin_t* c, const char* api, bool floating)
+{
+    Inst* p = INST(c);
+    return floating == GUI_FLOATING && api && !strcmp(api, GUI_API) && p->fx && (p->fx->flags & effFlagsHasEditor);
+}
+static bool gui_preferred(const clap_plugin_t* c, const char** api, bool* floating)
+{
+    if (!gui_supported(c, GUI_API, GUI_FLOATING)) return false;
+    *api = GUI_API; *floating = GUI_FLOATING; return true;
+}
+static bool gui_create(const clap_plugin_t* c, const char* api, bool floating)
+{
+    Inst* p = INST(c);
+    if (!gui_supported(c, api, floating)) return false;
+    read_rect(p);
+    if (p->gui_w <= 0 || p->gui_h <= 0) { p->gui_w = 640; p->gui_h = 480; }
+    p->gui_made = 1; return true;
+}
+static void gui_destroy(const clap_plugin_t* c)
+{
+    Inst* p = INST(c);
+    gui_release(p);
+    if (p->gui_open) disp(p, effEditClose, 0, 0, 0, 0);
+    p->gui_open = 0; p->gui_made = 0;
+}
+static bool gui_scale(const clap_plugin_t* c, double s) { (void)c; (void)s; return false; }
+static bool gui_size(const clap_plugin_t* c, uint32_t* w, uint32_t* h)
+{
+    Inst* p = INST(c);
+    if (!p->gui_made) return false;
+    *w = (uint32_t)p->gui_w; *h = (uint32_t)p->gui_h; return true;
+}
+static bool gui_can_resize(const clap_plugin_t* c) { (void)c; return false; }
+static bool gui_hints(const clap_plugin_t* c, clap_gui_resize_hints_t* h) { (void)c; (void)h; return false; }
+static bool gui_adjust(const clap_plugin_t* c, uint32_t* w, uint32_t* h) { return gui_size(c, w, h); }
+static bool gui_set_size(const clap_plugin_t* c, uint32_t w, uint32_t h) { Inst* p = INST(c); return (int)w == p->gui_w && (int)h == p->gui_h; }
+static bool gui_transient(const clap_plugin_t* c, const clap_window_t* w) { (void)c; (void)w; return false; }
+static void gui_title(const clap_plugin_t* c, const char* t) { (void)c; (void)t; }
+
+#ifdef VB_GUI_FLOATING
+// macOS: show opens the plugin's window (with a title bar, always on top) or shows it again, hide hides it; closing it
+// by hand only hides it, and the timer tells the host
+static void gui_release(Inst* p) { timer_stop(p); }
+static bool gui_set_parent(const clap_plugin_t* c, const clap_window_t* win) { (void)c; (void)win; return false; }
+static bool gui_show(const clap_plugin_t* c)
+{
+    Inst* p = INST(c);
+    if (!p->gui_made || !p->fx) return false;
+    if (p->gui_open) vb_stub_edit_show(p->fx, 1);
+    else {
+        p->gui_open = 1;
+        if (!vb_stub_edit_open(p->fx, VB_F_FLOATING)) { p->gui_open = 0; return false; }
+        read_rect(p);
+    }
+    timer_start(p, 250);
+    return true;
+}
+static bool gui_hide(const clap_plugin_t* c)
+{
+    Inst* p = INST(c);
+    if (!p->gui_open) return false;
+    vb_stub_edit_show(p->fx, 0);
+    return true;
+}
+static void on_timer(const clap_plugin_t* c, clap_id id)
+{
+    Inst* p = INST(c);
+    if (id != p->timer || !p->gui_open || !p->fx || !vb_stub_edit_closed(p->fx)) return;
+    const clap_host_gui_t* hg = p->hgui;
+    if (hg && hg->closed) hg->closed(p->host, false);
+}
+#else
+// Linux: the helper opens the editor in a bare window titled "VST2Bridge <token>"; it is found by that title and
+// moved into the host's X11 window (XReparentWindow), as other Wine bridges do
+static xcb_atom_t atom(xcb_connection_t* c, const char* name)
+{
+    xcb_intern_atom_reply_t* r = xcb_intern_atom_reply(c, xcb_intern_atom(c, 0, (uint16_t)strlen(name), name), 0);
+    xcb_atom_t a = r ? r->atom : XCB_ATOM_NONE; free(r); return a;
+}
+static int has_title(xcb_connection_t* c, xcb_window_t w, xcb_atom_t prop, xcb_atom_t type, const char* title)
+{
+    xcb_get_property_reply_t* r = xcb_get_property_reply(c, xcb_get_property(c, 0, w, prop, type, 0, 64), 0);
+    int hit = 0;
+    size_t tl = strlen(title);
+    if (r) { int n = xcb_get_property_value_length(r); const char* v = (const char*)xcb_get_property_value(r);
+             for (int i = 0; i + (int)tl <= n; i++) if (!strncmp(v + i, title, tl)) hit = 1; }
+    free(r); return hit;
+}
+static xcb_window_t find_window(xcb_connection_t* c, xcb_window_t w, const char* title, xcb_atom_t net_name, xcb_atom_t utf8, int depth)
+{
+    if (has_title(c, w, XCB_ATOM_WM_NAME, XCB_ATOM_ANY, title) || has_title(c, w, net_name, utf8, title)) return w;
+    if (depth <= 0) return 0;
+    xcb_query_tree_reply_t* t = xcb_query_tree_reply(c, xcb_query_tree(c, w), 0);
+    xcb_window_t found = 0;
+    if (t) { xcb_window_t* ch = xcb_query_tree_children(t);
+             for (int i = 0; i < xcb_query_tree_children_length(t) && !found; i++) found = find_window(c, ch[i], title, net_name, utf8, depth - 1);
+             free(t); }
+    return found;
+}
+// tell Wine where its window is on the screen (it does not see the host's window moving), so that clicks hit
+static void send_position(Inst* p)
+{
+    if (!p->xc || !p->xchild) return;
+    xcb_translate_coordinates_reply_t* r = xcb_translate_coordinates_reply(p->xc, xcb_translate_coordinates(p->xc, p->xchild, p->xroot, 0, 0), 0);
+    if (!r) return;
+    int x = r->dst_x, y = r->dst_y; free(r);
+    if (x == p->last_x && y == p->last_y) return;
+    p->last_x = x; p->last_y = y;
+    xcb_configure_notify_event_t ev; memset(&ev, 0, sizeof ev);
+    ev.response_type = XCB_CONFIGURE_NOTIFY; ev.event = p->xchild; ev.window = p->xchild;
+    ev.x = (int16_t)x; ev.y = (int16_t)y; ev.width = (uint16_t)p->gui_w; ev.height = (uint16_t)p->gui_h;
+    xcb_send_event(p->xc, 0, p->xchild, XCB_EVENT_MASK_STRUCTURE_NOTIFY, (const char*)&ev);
+    xcb_flush(p->xc);
+}
+static void gui_release(Inst* p)
+{
+    timer_stop(p);
+    if (p->xc) { xcb_disconnect(p->xc); p->xc = 0; }
+    p->xchild = 0;
+}
+static bool gui_set_parent(const clap_plugin_t* c, const clap_window_t* win)
+{
+    Inst* p = INST(c);
+    if (!p->gui_made || !win || !win->x11 || p->gui_open || !p->fx) return false;
+    int w0 = p->gui_w, h0 = p->gui_h;
+    p->gui_open = 1;                          // before the call: a sizeWindow inside effEditOpen goes to the host
+    if (!vb_stub_edit_open(p->fx, VB_F_TOPLEVEL)) { p->gui_open = 0; return false; }
+    read_rect(p);
+    p->xc = xcb_connect(0, 0);
+    if (!p->xc || xcb_connection_has_error(p->xc)) { if (p->xc) xcb_disconnect(p->xc); p->xc = 0; return false; }
+    p->xparent = (xcb_window_t)win->x11;
+    p->xroot = xcb_setup_roots_iterator(xcb_get_setup(p->xc)).data->root;
+    xcb_atom_t net_name = atom(p->xc, "_NET_WM_NAME"), utf8 = atom(p->xc, "UTF8_STRING");
+    char title[64]; snprintf(title, sizeof title, "VST2Bridge %s", vb_stub_token(p->fx));
+    for (int i = 0; i < 100 && !p->xchild; i++) {                  // the window appears a moment after the call
+        p->xchild = find_window(p->xc, p->xroot, title, net_name, utf8, 3);
+        if (!p->xchild) usleep(50000);
+    }
+    if (!p->xchild) { log_error(p, "the editor window of the helper was not found (X11 only, no Wayland)"); return false; }
+    xcb_reparent_window(p->xc, p->xchild, p->xparent, 0, 0);
+    xcb_map_window(p->xc, p->xchild);
+    xcb_flush(p->xc);
+    p->last_x = p->last_y = -100000;
+    send_position(p);
+    timer_start(p, 100);
+    if ((p->gui_w != w0 || p->gui_h != h0) && p->hgui && p->hgui->request_resize)
+        p->hgui->request_resize(p->host, (uint32_t)p->gui_w, (uint32_t)p->gui_h);
+    return true;
+}
+static bool gui_show(const clap_plugin_t* c)
+{
+    Inst* p = INST(c);
+    if (!p->gui_open) return false;
+    vb_stub_edit_show(p->fx, 1);
+    if (p->xc) { xcb_map_window(p->xc, p->xchild); xcb_flush(p->xc); send_position(p); }
+    return true;
+}
+static bool gui_hide(const clap_plugin_t* c)
+{
+    Inst* p = INST(c);
+    if (!p->gui_open) return false;
+    if (p->xc) { xcb_unmap_window(p->xc, p->xchild); xcb_flush(p->xc); }
+    vb_stub_edit_show(p->fx, 0);
+    return true;
+}
+static void on_timer(const clap_plugin_t* c, clap_id id)
+{
+    Inst* p = INST(c);
+    if (id == p->timer && p->gui_open) send_position(p);
+}
+#endif
+static const clap_plugin_gui_t ext_gui = {
+    gui_supported, gui_preferred, gui_create, gui_destroy, gui_scale, gui_size, gui_can_resize, gui_hints,
+    gui_adjust, gui_set_size, gui_set_parent, gui_transient, gui_title, gui_show, gui_hide
+};
+static const clap_plugin_timer_support_t ext_timer = { on_timer };
+#endif
+
 static const void* pl_ext(const clap_plugin_t* c, const char* id)
 {
     Inst* p = INST(c);
@@ -768,6 +1054,9 @@ static const void* pl_ext(const clap_plugin_t* c, const char* id)
     if (!strcmp(id, CLAP_EXT_STATE)) return &ext_state;
     if (!strcmp(id, CLAP_EXT_LATENCY)) return &ext_latency;
     if (!strcmp(id, CLAP_EXT_GUI) && p->fx && (p->fx->flags & effFlagsHasEditor)) return &ext_gui;
+#ifndef _WIN32
+    if (!strcmp(id, CLAP_EXT_TIMER_SUPPORT)) return &ext_timer;
+#endif
     return 0;
 }
 
@@ -780,9 +1069,9 @@ static const clap_plugin_t* fac_create(const clap_plugin_factory_t* f, const cla
     (void)f;
     probe();
     if (!g_ok || !id || strcmp(id, g_id) || !host) return 0;
-    EnterCriticalSection(&g_lock);
+    glock();
     Inst* p = g_spare; g_spare = 0;          // the plugin made for the descriptor saves one start of the helper
-    LeaveCriticalSection(&g_lock);
+    gunlock();
     if (!p && !(p = inst_alloc())) return 0;
     p->host = host;
     p->plugin.desc = &g_desc; p->plugin.plugin_data = p;
@@ -794,6 +1083,14 @@ static const clap_plugin_t* fac_create(const clap_plugin_factory_t* f, const cla
 }
 static const clap_plugin_factory_t g_factory = { fac_count, fac_desc, fac_create };
 
+static void make_id(void)
+{
+    char low[256]; snprintf(low, sizeof low, "%s", g_stem8);
+    for (char* q = low; *q; q++) { if (*q >= 'A' && *q <= 'Z') *q += 32; else if (*q == ' ') *q = '-'; }
+    snprintf(g_id, sizeof g_id, "io.github.nightfright2k19.vst2bridge.%s", low);
+}
+
+#ifdef _WIN32
 static bool entry_init(const char* path)
 {
     InitOnceExecuteOnce(&g_once, init_lock, 0, 0);
@@ -815,12 +1112,32 @@ static bool entry_init(const char* path)
     size_t n = wcslen(stem);
     if (n > 4 && (!_wcsicmp(stem + n - 4, L"_x64") || !_wcsicmp(stem + n - 4, L"_x86"))) stem[n - 4] = 0;
     WideCharToMultiByte(CP_UTF8, 0, stem, -1, g_stem8, sizeof g_stem8, 0, 0);
-    char low[256]; snprintf(low, sizeof low, "%s", g_stem8);
-    for (char* q = low; *q; q++) { if (*q >= 'A' && *q <= 'Z') *q += 32; else if (*q == ' ') *q = '-'; }
-    snprintf(g_id, sizeof g_id, "io.github.nightfright2k19.vst2bridge.%s", low);
+    make_id();
     g_inits = 1;
     return true;
 }
+#else
+// foo.clap -> foo.dll in the same folder (macOS: hosts pass the bundle foo.clap or its foo.clap/Contents/MacOS/foo)
+static bool entry_init(const char* path)
+{
+    if (g_inits) { g_inits++; return true; }
+    if (!path || !*path) return false;
+    char full[PATH_MAX];
+    snprintf(full, sizeof full, "%s", path);
+    char* b = strstr(full, ".clap/Contents/MacOS");
+    if (b) b[5] = 0;
+    size_t n = strlen(full); while (n > 1 && full[n - 1] == '/') full[--n] = 0;
+    char* slash = strrchr(full, '/');
+    const char* base = slash ? slash + 1 : full;
+    snprintf(g_stem, sizeof g_stem, "%s", base);
+    char* dot = strrchr(g_stem, '.'); if (dot && dot != g_stem) *dot = 0;
+    if (slash) { *slash = 0; snprintf(g_dir, sizeof g_dir, "%s", full[0] ? full : "/"); } else snprintf(g_dir, sizeof g_dir, ".");
+    snprintf(g_stem8, sizeof g_stem8, "%s", g_stem);
+    make_id();
+    g_inits = 1;
+    return true;
+}
+#endif
 static void entry_deinit(void)
 {
     if (!g_inits || --g_inits) return;
@@ -830,5 +1147,5 @@ static void entry_deinit(void)
 }
 static const void* entry_factory(const char* id) { return !strcmp(id, CLAP_PLUGIN_FACTORY_ID) ? &g_factory : 0; }
 
-__declspec(dllexport) const clap_plugin_entry_t clap_entry = { CLAP_VERSION_INIT, entry_init, entry_deinit, entry_factory };
-__declspec(dllexport) int VST2BridgeClap(void) { return 1; }     // marker for the patcher
+VB_EXPORT const clap_plugin_entry_t clap_entry = { CLAP_VERSION_INIT, entry_init, entry_deinit, entry_factory };
+VB_EXPORT int VST2BridgeClap(void) { return 1; }                 // marker for the patcher

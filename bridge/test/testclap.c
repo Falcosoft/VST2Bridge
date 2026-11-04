@@ -1,12 +1,28 @@
-// testclap.c - a minimal CLAP host for the tests of the CLAP bridge (built as 32-bit and 64-bit):
-//   testclap.exe <name>_xNN.clap
-// The .clap loads the VST2 bridge <name>_xNN.dll next to it, which runs test/fakevst.c in the other bitness.
+// testclap.c - a minimal CLAP host for the tests of the CLAP bridge.
+//   Windows (built as 32-bit and 64-bit): testclap.exe <name>_xNN.clap
+//     The .clap loads the VST2 bridge <name>_xNN.dll next to it, which runs test/fakevst.c in the other bitness.
+//   Linux (native):  testclap <name>.clap <Fake32|Fake64> [floating]
+//     The .clap runs <name>.dll next to it under Wine. Editor: embedded into an X11 window, or (floating) the macOS
+//     variant of the CLAP built on Linux with -DVB_FLOATING_GUI.
 // Exit code = number of failures.
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <time.h>
+#include <unistd.h>
+#include <xcb/xcb.h>
+typedef int32_t LONG;
+#define InterlockedIncrement(p) __atomic_add_fetch((p), 1, __ATOMIC_SEQ_CST)
+#define InterlockedExchange(p, v) __atomic_exchange_n((p), (v), __ATOMIC_SEQ_CST)
+static unsigned GetTickCount(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (unsigned)(t.tv_sec * 1000 + t.tv_nsec / 1000000); }
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
 #include "../clap/clap.h"
 
 static int fails;
@@ -19,13 +35,19 @@ static void hp_rescan(const clap_host_t* h, clap_param_rescan_flags f) { (void)h
 static void hp_clear(const clap_host_t* h, clap_id id, clap_param_clear_flags f) { (void)h; (void)id; (void)f; }
 static void hp_flush(const clap_host_t* h) { (void)h; InterlockedIncrement(&n_flush); }
 static const clap_host_params_t ext_params = { hp_rescan, hp_clear, hp_flush };
+static int closed_by_user;
+static void hg_closed2(const clap_host_t* h, bool d) { (void)h; (void)d; closed_by_user++; }
 static void hg_hints(const clap_host_t* h) { (void)h; }
 static bool hg_resize(const clap_host_t* h, uint32_t w, uint32_t hh) { (void)h; InterlockedIncrement(&n_resize); last_w = (LONG)w; last_h = (LONG)hh; return true; }
 static bool hg_show(const clap_host_t* h) { (void)h; return true; }
-static void hg_closed(const clap_host_t* h, bool d) { (void)h; (void)d; }
-static const clap_host_gui_t ext_gui = { hg_hints, hg_resize, hg_show, hg_show, hg_closed };
+static const clap_host_gui_t ext_gui = { hg_hints, hg_resize, hg_show, hg_show, hg_closed2 };
 static void hl_changed(const clap_host_t* h) { (void)h; InterlockedIncrement(&n_latency); }
 static const clap_host_latency_t ext_lat = { hl_changed };
+static clap_id timer_id = CLAP_INVALID_ID; static uint32_t timer_ms, timer_last;
+static bool ht_register(const clap_host_t* h, uint32_t ms, clap_id* id) { (void)h; timer_id = 7; timer_ms = ms; *id = 7; return true; }
+static bool ht_unregister(const clap_host_t* h, clap_id id) { (void)h; if (id == timer_id) timer_id = CLAP_INVALID_ID; return true; }
+static const clap_host_timer_support_t ext_timer = { ht_register, ht_unregister };
+
 static const void* host_ext(const clap_host_t* h, const char* id)
 {
     (void)h;
@@ -33,6 +55,7 @@ static const void* host_ext(const clap_host_t* h, const char* id)
     if (!strcmp(id, CLAP_EXT_PARAMS)) return &ext_params;
     if (!strcmp(id, CLAP_EXT_GUI)) return &ext_gui;
     if (!strcmp(id, CLAP_EXT_LATENCY)) return &ext_lat;
+    if (!strcmp(id, CLAP_EXT_TIMER_SUPPORT)) return &ext_timer;
     return 0;
 }
 static void h_restart(const clap_host_t* h) { (void)h; InterlockedIncrement(&n_restart); }
@@ -76,25 +99,73 @@ static void run(const clap_plugin_t* pl, InEv* e, OutEv* o, uint32_t frames, con
 
 static void pump(const clap_plugin_t* pl, int ms)
 {
-    DWORD t0 = GetTickCount();
+    unsigned t0 = GetTickCount();
     while ((int)(GetTickCount() - t0) < ms) {
+#ifdef _WIN32
         MSG m;
         while (PeekMessageA(&m, 0, 0, 0, PM_REMOVE)) { TranslateMessage(&m); DispatchMessageA(&m); }
+#endif
         if (n_callback) { InterlockedExchange(&n_callback, 0); pl->on_main_thread(pl); }
+        if (timer_id != CLAP_INVALID_ID && GetTickCount() - timer_last >= timer_ms) {
+            timer_last = GetTickCount();
+            const clap_plugin_timer_support_t* ts = pl->get_extension(pl, CLAP_EXT_TIMER_SUPPORT);
+            if (ts) ts->on_timer(pl, timer_id);
+        }
+#ifdef _WIN32
         MsgWaitForMultipleObjects(0, 0, FALSE, 10, QS_ALLINPUT);
+#else
+        usleep(10000);
+#endif
     }
 }
+
+#ifndef _WIN32
+// X11: the window of the helper with this title (WM_NAME), searched from w
+static xcb_window_t x_find(xcb_connection_t* c, xcb_window_t w, const char* title, int depth)
+{
+    xcb_get_property_reply_t* r = xcb_get_property_reply(c, xcb_get_property(c, 0, w, XCB_ATOM_WM_NAME, XCB_ATOM_ANY, 0, 64), 0);
+    int hit = r && xcb_get_property_value_length(r) == (int)strlen(title) && !memcmp(xcb_get_property_value(r), title, strlen(title));
+    free(r);
+    if (hit) return w;
+    if (depth <= 0) return 0;
+    xcb_query_tree_reply_t* t = xcb_query_tree_reply(c, xcb_query_tree(c, w), 0);
+    xcb_window_t found = 0;
+    if (t) { xcb_window_t* ch = xcb_query_tree_children(t);
+             for (int i = 0; i < xcb_query_tree_children_length(t) && !found; i++) found = x_find(c, ch[i], title, depth - 1);
+             free(t); }
+    return found;
+}
+static int x_children(xcb_connection_t* c, xcb_window_t w)
+{
+    xcb_query_tree_reply_t* t = xcb_query_tree_reply(c, xcb_query_tree(c, w), 0);
+    int n = t ? xcb_query_tree_children_length(t) : -1; free(t); return n;
+}
+static int x_viewable(xcb_connection_t* c, xcb_window_t w)
+{
+    xcb_get_window_attributes_reply_t* a = xcb_get_window_attributes_reply(c, xcb_get_window_attributes(c, w), 0);
+    int v = a && a->map_state == XCB_MAP_STATE_VIEWABLE; free(a); return v;
+}
+#endif
 
 int main(int argc, char** argv)
 {
     if (argc < 2) { printf("usage: testclap <bridge.clap>\n"); return 99; }
+#ifdef _WIN32
     const char* other = sizeof(void*) == 8 ? "Fake32" : "Fake64";
-    printf("host is %d-bit, CLAP %s\n", (int)sizeof(void*) * 8, argv[1]);
     HMODULE m = LoadLibraryA(argv[1]);
+#define SYM(n) GetProcAddress(m, n)
+#else
+    const char* other = argc > 2 ? argv[2] : "Fake32";
+    int floating = argc > 3 && !strcmp(argv[3], "floating");
+    void* m = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!m) printf("      dlopen: %s\n", dlerror());
+#define SYM(n) dlsym(m, n)
+#endif
+    printf("host is %d-bit, CLAP %s\n", (int)sizeof(void*) * 8, argv[1]);
     CHECK(m != 0, "load the CLAP");
     if (!m) return 1;
-    CHECK(GetProcAddress(m, "VST2BridgeClap") != 0, "exports VST2BridgeClap");
-    const clap_plugin_entry_t* entry = (const clap_plugin_entry_t*)(void*)GetProcAddress(m, "clap_entry");
+    CHECK(SYM("VST2BridgeClap") != 0, "exports VST2BridgeClap");
+    const clap_plugin_entry_t* entry = (const clap_plugin_entry_t*)(void*)SYM("clap_entry");
     CHECK(entry && entry->init(argv[1]), "clap_entry init");
     if (!entry) return 1;
     const clap_plugin_factory_t* f = (const clap_plugin_factory_t*)entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
@@ -157,26 +228,72 @@ int main(int argc, char** argv)
     CHECK(o.nvalues == 0, "the host's own change is not sent back");
 
     // editor: nested sizeWindow inside effEditOpen, then begin/automate/end and sizeWindow from the plugin's GUI
+    const clap_plugin_gui_t* g = pl->get_extension(pl, CLAP_EXT_GUI);
+    uint32_t gw = 0, gh = 0;
+#ifdef _WIN32
     WNDCLASSA wc; memset(&wc, 0, sizeof wc); wc.lpfnWndProc = DefWindowProcA; wc.hInstance = GetModuleHandleA(0); wc.lpszClassName = "TestClapWnd";
     RegisterClassA(&wc);
     HWND w = CreateWindowA("TestClapWnd", "testclap", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 0, 0, 600, 400, 0, 0, GetModuleHandleA(0), 0);
-    const clap_plugin_gui_t* g = pl->get_extension(pl, CLAP_EXT_GUI);
-    uint32_t gw = 0, gh = 0;
     CHECK(g->is_api_supported(pl, CLAP_WINDOW_API_WIN32, false) && g->create(pl, CLAP_WINDOW_API_WIN32, false) && g->get_size(pl, &gw, &gh),
           "gui create, size %ux%u", gw, gh);
     CHECK(gw == 300 && gh == 200, "editor size before open");
     clap_window_t win; win.api = CLAP_WINDOW_API_WIN32; win.win32 = w;
     CHECK(g->set_parent(pl, &win) && g->show(pl), "editor opened in the host window");
-    CHECK(n_resize >= 1 && last_w == 320 && last_h == 240, "resize request from inside effEditOpen (%ldx%ld)", last_w, last_h);
+    CHECK(n_resize >= 1 && last_w == 320 && last_h == 240, "resize request from inside effEditOpen (%ldx%ld)", (long)last_w, (long)last_h);
     pump(pl, 800);
-    CHECK(last_w == 400 && last_h == 250, "resize request started by the plugin's GUI (%ldx%ld)", last_w, last_h);
+    CHECK(last_w == 400 && last_h == 250, "resize request started by the plugin's GUI (%ldx%ld)", (long)last_w, (long)last_h);
+#else
+    xcb_connection_t* xc = xcb_connect(0, 0);
+    xcb_screen_t* scr = xcb_setup_roots_iterator(xcb_get_setup(xc)).data;
+    if (!floating) {
+        xcb_window_t w = xcb_generate_id(xc);
+        xcb_create_window(xc, XCB_COPY_FROM_PARENT, w, scr->root, 0, 0, 600, 400, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, scr->root_visual, 0, 0);
+        xcb_map_window(xc, w); xcb_flush(xc);
+        CHECK(g && g->is_api_supported(pl, CLAP_WINDOW_API_X11, false) && !g->is_api_supported(pl, CLAP_WINDOW_API_COCOA, true)
+              && g->create(pl, CLAP_WINDOW_API_X11, false) && g->get_size(pl, &gw, &gh), "gui create (X11), size %ux%u", gw, gh);
+        CHECK(gw == 300 && gh == 200, "editor size before open");
+        clap_window_t win; win.api = CLAP_WINDOW_API_X11; win.x11 = w;
+        CHECK(g->set_parent(pl, &win) && g->show(pl), "editor opened");
+        CHECK(x_children(xc, w) == 1, "the helper's window was moved into the host's X11 window");
+        CHECK(n_resize >= 1 && last_w == 320 && last_h == 240, "resize request from inside effEditOpen (%ldx%ld)", (long)last_w, (long)last_h);
+        CHECK(timer_id != CLAP_INVALID_ID, "timer registered (window position for Wine)");
+        pump(pl, 800);
+        CHECK(last_w == 400 && last_h == 250, "resize request started by the plugin's GUI (%ldx%ld)", (long)last_w, (long)last_h);
+        g->destroy(pl);
+        CHECK(timer_id == CLAP_INVALID_ID, "gui destroy unregisters the timer");
+        xcb_destroy_window(xc, w);
+    } else {
+        CHECK(g && g->is_api_supported(pl, CLAP_WINDOW_API_COCOA, true) && !g->is_api_supported(pl, CLAP_WINDOW_API_X11, false)
+              && g->create(pl, CLAP_WINDOW_API_COCOA, true) && g->get_size(pl, &gw, &gh), "gui create (floating), size %ux%u", gw, gh);
+        clap_window_t win; win.api = CLAP_WINDOW_API_COCOA; win.cocoa = 0;
+        CHECK(!g->set_parent(pl, &win), "floating: no embedding");
+        int before = n_resize;
+        CHECK(g->show(pl), "floating editor shown");
+        xcb_window_t fw = 0;
+        for (int i = 0; i < 100 && !fw; i++) { fw = x_find(xc, scr->root, "FakeVST", 3); if (!fw) usleep(50000); }
+        CHECK(fw != 0, "Wine's window with the plugin's name exists");
+        pump(pl, 800);
+        CHECK(n_resize == before, "floating: no resize requests to the host");
+        CHECK(g->hide(pl), "hide");
+        pump(pl, 300);
+        CHECK(fw && !x_viewable(xc, fw), "the window is hidden");
+        CHECK(g->show(pl), "show again");
+        pump(pl, 300);
+        CHECK(fw && x_viewable(xc, fw), "the window is visible again");
+        g->destroy(pl);
+        // the plugin's GUI still changed parameter 2 meanwhile
+    }
+    xcb_disconnect(xc);
+#endif
     CHECK(n_flush >= 1, "request_flush for a change made in the plugin's GUI");
     out_init(&o); in_init(&e);
     run(pl, &e, &o, 64, 0);
     CHECK(o.nvalues == 1 && o.value_idx[0] == 2 && fabs(o.value[0] - 0.75) < 1e-6 && o.gestures == 2,
           "the change reaches the host as gesture begin / value / end (%d values, %d gestures)", o.nvalues, o.gestures);
+#ifdef _WIN32
     g->destroy(pl);
     DestroyWindow(w);
+#endif
 
     // state: the plugin's chunk
     const clap_plugin_state_t* st = pl->get_extension(pl, CLAP_EXT_STATE);
@@ -185,6 +302,19 @@ int main(int argc, char** argv)
     CHECK(st->load(pl, &is), "state load");
     mem.pos = 0; mem.buf[0] ^= 1;
     CHECK(!st->load(pl, &is), "state with a wrong header is refused");
+    // a chunk larger than a frame (64 KB) goes through a mapping (Windows) or a file (Linux / macOS) of its own
+    {
+        uint32_t big = 200 * 1024, hdr[5] = { 0x4C434256u, 1, 1, 0, 200 * 1024 };
+        memset(&mem, 0, sizeof mem);
+        memcpy(mem.buf, hdr, sizeof hdr);
+        for (uint32_t i = 0; i < big; i++) mem.buf[20 + i] = (uint8_t)(i * 13);
+        mem.len = 20 + big; mem.pos = 0;
+        CHECK(st->load(pl, &is), "state load with a 200 KB chunk");
+        memset(&mem, 0, sizeof mem);
+        int same = st->save(pl, &os) && mem.len == 20 + big;
+        for (uint32_t i = 0; same && i < big; i++) if (mem.buf[20 + i] != (uint8_t)(i * 13)) same = 0;
+        CHECK(same, "state save gives the 200 KB chunk back (%u bytes)", mem.len);
+    }
 
     // a second instance next to the first (its own helper)
     const clap_plugin_t* pl2 = f->create_plugin(f, &host, d->id);

@@ -1,7 +1,12 @@
 name: Check
 
-# Pull requests (and manual runs): builds the bridge with mingw-w64, runs the bridge tests in both directions under
-# Wine (bridge/test/run_tests.sh) and checks the patcher from source (syntax, --selftest, --cli on the test plugins).
+# Pull requests (and manual runs):
+# - Linux: builds the bridge with mingw-w64 and the Linux CLAP with gcc, runs the bridge tests under Wine
+#   (bridge/test/run_tests.sh: both Windows directions, the Linux CLAP with a 32-bit and a 64-bit plugin, the macOS
+#   variant of the CLAP built on Linux) and checks the patcher from source (syntax, --selftest, --cli as the Windows
+#   and as the Linux patcher).
+# - macOS: builds the universal CLAP, freezes the patcher like the release (--selftest must see arm64 + x86_64), lets
+#   it write a .clap bundle, verifies the signature and loads the bundle (without Wine: entry and factory only).
 
 on:
   pull_request:
@@ -25,7 +30,7 @@ jobs:
           sudo dpkg --add-architecture i386
           sudo apt-get update
           # no recommends: they pull in hundreds of MB (fonts, GStreamer ...) the tests do not need
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-mingw-w64 wine wine64 wine32:i386 xvfb xauth
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-mingw-w64 libxcb1-dev wine wine64 wine32:i386 xvfb xauth
 
       - name: Initialise Wine
         timeout-minutes: 5
@@ -40,14 +45,80 @@ jobs:
           set -euo pipefail
           python3 -m py_compile patcher.py patcher_i18n.py utility/*.py
           python3 patcher.py --selftest
+          VB_TEST_SYSTEM=windows python3 patcher.py --selftest
           T="$(mktemp -d)"; mkdir -p "$T/Input/sub"
           i686-w64-mingw32-gcc -O2 -Ibridge -shared -o "$T/Input/plug32.dll" bridge/test/fakevst.c -static-libgcc -s
           x86_64-w64-mingw32-gcc -O2 -Ibridge -shared -o "$T/Input/sub/plug64.dll" bridge/test/fakevst.c -static-libgcc -s
-          python3 patcher.py --cli "$T"
-          test -f "$T/Input/plug32_x64.dll" && test -f "$T/Input/plug32_x64.clap" && test -f "$T/Input/vst2bridge-host32.exe"
-          test -f "$T/Input/sub/plug64_x86.dll" && test -f "$T/Input/sub/plug64_x86.clap" && test -f "$T/Input/sub/vst2bridge-host64.exe"
-          python3 patcher.py --cli "$T" | grep -c current | grep -qx 2
+          mkdir -p fake && cp "$T/Input/plug32.dll" fake/        # for the macOS job
+          cp -r "$T/Input" "$T/Win"
+          echo "== as the Windows patcher"
+          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win"
+          test -f "$T/Win/plug32_x64.dll" && test -f "$T/Win/plug32_x64.clap" && test -f "$T/Win/vst2bridge-host32.exe"
+          test -f "$T/Win/sub/plug64_x86.dll" && test -f "$T/Win/sub/plug64_x86.clap" && test -f "$T/Win/sub/vst2bridge-host64.exe"
+          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win" | grep -c current | grep -qx 2
+          echo "== as the Linux patcher (CLAP only)"
+          python3 patcher.py --cli "$T/Input"
+          test -f "$T/Input/plug32.clap" && test -f "$T/Input/vst2bridge-host32.exe" && test ! -e "$T/Input/plug32_x64.dll"
+          test -f "$T/Input/sub/plug64.clap" && test -f "$T/Input/sub/vst2bridge-host64.exe"
+          python3 patcher.py --cli "$T/Input" | grep -c current | grep -qx 2
 
       - name: Stop Wine
         if: always()
         run: wineserver -k || true          # leftover Wine processes make the job hang in its cleanup
+
+      - name: Upload helpers and test plugin (macOS job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-bin
+          path: |
+            bridge/vst2bridge-host32.exe
+            bridge/vst2bridge-host64.exe
+            fake/plug32.dll
+          if-no-files-found: error
+
+  macos:
+    name: macOS CLAP and patcher
+    needs: check
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download helpers and test plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: check-bin
+          path: dl
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          make -C bridge macos
+          lipo -info bridge/vst2bridge-macos
+          clang -O2 -Wall -Ibridge -o smoke bridge/test/smoke.c
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Freeze the patcher like the release, self test, write a bundle and load it
+        run: |
+          set -euo pipefail
+          mkdir bin
+          cp dl/bridge/vst2bridge-host32.exe dl/bridge/vst2bridge-host64.exe bin/
+          gzip -9 -c bridge/vst2bridge-macos > bin/vst2bridge-macos.gz   # gzipped: PyInstaller would thin a bare Mach-O file
+          python -m pip install --quiet pyinstaller
+          python -m PyInstaller --onefile --windowed --noconfirm --clean --name VST2Bridge-Patcher \
+            --paths utility --paths . --add-data "bin:bin" --add-data "docs/versions.md:docs" \
+            --hidden-import patcher_i18n --hidden-import bridges --hidden-import pe --hidden-import selfupdate patcher.py
+          P=dist/VST2Bridge-Patcher.app/Contents/MacOS/VST2Bridge-Patcher
+          "$P" --selftest
+          mkdir -p t && cp dl/fake/plug32.dll t/
+          "$P" --cli "$PWD/t"
+          find t
+          codesign --verify --verbose t/plug32.clap
+          ./smoke t/plug32.clap
+          ./smoke t/plug32.clap/Contents/MacOS/plug32
+          "$P" --cli "$PWD/t" | grep -q current

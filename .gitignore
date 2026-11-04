@@ -6,3 +6,4 @@ build/
 dist/
 *.spec
 bridge/*.clap
+bridge/vst2bridge-macos
