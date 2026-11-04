@@ -14,6 +14,7 @@ jobs:
   check:
     name: Bridge tests (Wine) and patcher
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -23,12 +24,15 @@ jobs:
           set -euo pipefail
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64 wine wine64 wine32:i386 xvfb
+          # no recommends: they pull in hundreds of MB (fonts, GStreamer ...) the tests do not need
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-mingw-w64 wine wine64 wine32:i386 xvfb xauth
 
       - name: Initialise Wine
+        timeout-minutes: 5
         run: xvfb-run -a wine wineboot -i
 
       - name: Bridge tests
+        timeout-minutes: 10
         run: bash bridge/test/run_tests.sh
 
       - name: Patcher
