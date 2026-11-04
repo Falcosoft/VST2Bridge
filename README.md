@@ -20,6 +20,8 @@ The CLAP bridge is a CLAP plugin around the VST2 bridge of the same name, so it 
 3. The patcher finds the plugins and tells whether each is 32-bit or 64-bit. Click **Create bridges**.
 4. Load `<plugin>_x64.dll` / `<plugin>_x64.clap` in a 64-bit host or `<plugin>_x86.dll` / `<plugin>_x86.clap` in a 32-bit host. CLAP hosts look in `C:\Program Files\Common Files\CLAP` by default: add the plugin folder to the host's CLAP folders. Keep the original plugin, both bridge files and the helper exe in the same folder (the `.clap` cannot be moved on its own).
 
+Hosts running at an unusual sample rate (e.g. 32000 Hz) get the plugin at 44100 Hz, converted by the bridge; `vst2bridge.ini` next to the plugin can change that (see [Sample rates](docs/technical.md#sample-rates)).
+
 The patcher speaks 29 languages (the system language, or pick one at the top right), updates itself (**Update** appears when a new release is out) and shows the changes with **What's new?**. Without a window: `VST2Bridge-Patcher.exe --cli [folder]`.
 
 ## More documentation

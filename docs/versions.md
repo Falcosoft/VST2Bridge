@@ -4,6 +4,7 @@ What changed in each Autobuild release, newest first. Releases are numbered `r<N
 
 | Release | Date | Changes |
 |---|---|---|
+| next | | Unusual sample rates: when the host runs at a rate other than 44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz (e.g. 32000 Hz), the plugin runs at 44100 Hz and the bridge converts audio and MIDI timing, so plugins like S-YXG50 keep the right pitch. `vst2bridge.ini` next to the plugin can set another rate or turn it off (VST2 and CLAP bridge). |
 | next | | CLAP bridge: plugins that set no "synth" flag and do not answer `effCanDo` (old instruments such as S-YXG50) are now offered as instruments with a MIDI input; before, hosts like Woof! rejected them and fell back to the previous MIDI synth. |
 | r3 | 2026-11-04 | CLAP bridges: next to every VST2 bridge the patcher also writes a CLAP bridge of the same name (`<name>_x64.clap` for 64-bit hosts, `<name>_x86.clap` for 32-bit hosts) with audio, MIDI, parameters, presets, latency and the plugin's window. Bridges written by r1 or r2 show as "update" and get their `.clap` with **Create bridges**. |
 | r2 | 2026-11-04 | Patcher: the same 29 languages as the SXG-Create-NF patcher (was English and German only); the system language is chosen automatically, the menu at the top right switches it. |
