@@ -28,18 +28,22 @@ gcc $CF -Wno-format-truncation -DVB_FLOATING_GUI -shared -fPIC -fvisibility=hidd
 mkdir -p "$T/a" "$T/b"
 cp "$T/fake32.dll" "$T/a/fake.dll"; cp vst2bridge-x64.dll "$T/a/fake_x64.dll"; cp vst2bridge-x64.clap "$T/a/fake_x64.clap"; cp vst2bridge-host32.exe "$T/a/"
 cp "$T/fake64.dll" "$T/b/fake.dll"; cp vst2bridge-x86.dll "$T/b/fake_x86.dll"; cp vst2bridge-x86.clap "$T/b/fake_x86.clap"; cp vst2bridge-host64.exe "$T/b/"
+# the CLAP alone (no bridge DLL next to it): plugin + helper + .clap, as when only the .clap is copied
+mkdir -p "$T/ca" "$T/cb"
+cp "$T/fake32.dll" "$T/ca/fake.dll"; cp vst2bridge-x64.clap "$T/ca/fake_x64.clap"; cp vst2bridge-host32.exe "$T/ca/"
+cp "$T/fake64.dll" "$T/cb/fake.dll"; cp vst2bridge-x86.clap "$T/cb/fake_x86.clap"; cp vst2bridge-host64.exe "$T/cb/"
 st=0
 echo "== 32-bit plugin in a 64-bit host (fake_x64.dll)"
 wine "$T/testhost64.exe" "$(winepath -w "$T/a/fake_x64.dll")" || st=1
 echo "== 64-bit plugin in a 32-bit host (fake_x86.dll)"
 wine "$T/testhost32.exe" "$(winepath -w "$T/b/fake_x86.dll")" || st=1
 echo "== 32-bit plugin as CLAP in a 64-bit host (fake_x64.clap)"
-wine "$T/testclap64.exe" "$(winepath -w "$T/a/fake_x64.clap")" || st=1
+wine "$T/testclap64.exe" "$(winepath -w "$T/ca/fake_x64.clap")" || st=1
 echo "== 64-bit plugin as CLAP in a 32-bit host (fake_x86.clap)"
-wine "$T/testclap32.exe" "$(winepath -w "$T/b/fake_x86.clap")" || st=1
+wine "$T/testclap32.exe" "$(winepath -w "$T/cb/fake_x86.clap")" || st=1
 echo "== old instrument (no synth flag, no effCanDo) as CLAP, as Woof! checks it"
-wine "$T/testclap64.exe" "$(winepath -w "$T/a/fake_x64.clap")" plain || st=1
-wine "$T/testclap32.exe" "$(winepath -w "$T/b/fake_x86.clap")" plain || st=1
+wine "$T/testclap64.exe" "$(winepath -w "$T/ca/fake_x64.clap")" plain || st=1
+wine "$T/testclap32.exe" "$(winepath -w "$T/cb/fake_x86.clap")" plain || st=1
 # Linux / macOS layout: <name>.clap next to <name>.dll and the helper of the plugin's bitness
 mkdir -p "$T/l32" "$T/l64" "$T/m32"
 cp "$T/fake32.dll" "$T/l32/fake.dll"; cp vst2bridge-linux.clap "$T/l32/fake.clap"; cp vst2bridge-host32.exe "$T/l32/"

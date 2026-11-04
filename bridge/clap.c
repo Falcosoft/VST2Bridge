@@ -49,14 +49,13 @@ static const char* g_features[4];
 static clap_plugin_descriptor_t g_desc;
 static int g_inits, g_probed, g_ok;
 #ifdef _WIN32
-static wchar_t g_dll[MAX_PATH], g_self_name[MAX_PATH];
+static wchar_t g_dir[MAX_PATH], g_stem[MAX_PATH], g_self_name[MAX_PATH];
+AEffect* vb_stub_main(AudioMasterCallback master, const wchar_t* dir, const wchar_t* stem, const wchar_t* self_name);   // stub.c, linked in
 static CRITICAL_SECTION g_lock;
 static INIT_ONCE g_once = INIT_ONCE_STATIC_INIT;
 static BOOL CALLBACK init_lock(PINIT_ONCE o, PVOID a, PVOID* c) { (void)o; (void)a; (void)c; InitializeCriticalSection(&g_lock); return TRUE; }
 static void glock(void) { EnterCriticalSection(&g_lock); }
 static void gunlock(void) { LeaveCriticalSection(&g_lock); }
-static HMODULE g_mod;
-static AEffect* (VSTCALL *g_entry)(AudioMasterCallback);
 #else
 static char g_dir[PATH_MAX], g_stem[256];
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -277,24 +276,6 @@ static intptr_t VSTCALL master(AEffect* e, int32_t op, int32_t idx, intptr_t val
     }
 }
 
-#ifdef _WIN32
-static int load_module(char* err, size_t n)
-{
-    glock();
-    if (!g_mod) {
-        g_mod = LoadLibraryW(g_dll);
-        if (!g_mod) snprintf(err, n, "cannot load %ls (error %lu)", g_dll, GetLastError());
-        else {
-            g_entry = (AEffect* (VSTCALL *)(AudioMasterCallback))(void*)GetProcAddress(g_mod, "VSTPluginMain");
-            if (!g_entry) g_entry = (AEffect* (VSTCALL *)(AudioMasterCallback))(void*)GetProcAddress(g_mod, "main");
-            if (!g_entry) { snprintf(err, n, "%ls is not a VST2 plugin", g_dll); FreeLibrary(g_mod); g_mod = 0; }
-        }
-    }
-    int ok = g_mod != 0;
-    gunlock();
-    return ok;
-}
-#endif
 
 static Inst* inst_alloc(void)
 {
@@ -314,14 +295,10 @@ static Inst* inst_alloc(void)
 static int inst_load(Inst* p)
 {
 #ifdef _WIN32
-    if (!load_module(p->error, sizeof p->error)) return 0;
     t_creating = p;
-    AEffect* fx = g_entry(master);
+    AEffect* fx = vb_stub_main(master, g_dir, g_stem, g_self_name);
     t_creating = 0;
-    if (!fx || fx->magic != kEffectMagic) {
-        snprintf(p->error, sizeof p->error, "%ls did not create the plugin (see the lines above in this log)", g_dll);
-        return 0;
-    }
+    if (!fx || fx->magic != kEffectMagic) { snprintf(p->error, sizeof p->error, "the plugin could not be started (see the line above in this log)"); return 0; }
 #else
     t_creating = p;
     AEffect* fx = vb_stub_main(master, g_dir, g_stem);
@@ -1105,18 +1082,13 @@ static bool entry_init(const char* path)
     for (wchar_t* q = full; *q; q++) if (*q == L'/') *q = L'\\';  // hosts mix both separators
     wchar_t* slash = wcsrchr(full, L'\\');
     wcsncpy(g_self_name, slash ? slash + 1 : full, MAX_PATH - 1);
-    // foo_x64.clap -> foo_x64.dll (the VST2 bridge) in the same folder
-    wcsncpy(g_dll, full, MAX_PATH - 1);
-    wchar_t* dot = wcsrchr(g_dll, L'.');
-    if (dot && (!slash || dot > g_dll + (slash - full))) *dot = 0;
-    if (wcslen(g_dll) + 5 >= MAX_PATH) return false;
-    wcscat(g_dll, L".dll");
-    // id and fallback name: the file name without extension and suffix, id in lower case
-    wchar_t stem[MAX_PATH]; wcsncpy(stem, g_self_name, MAX_PATH - 1); stem[MAX_PATH - 1] = 0;
-    dot = wcsrchr(stem, L'.'); if (dot) *dot = 0;
-    size_t n = wcslen(stem);
-    if (n > 4 && (!_wcsicmp(stem + n - 4, L"_x64") || !_wcsicmp(stem + n - 4, L"_x86"))) stem[n - 4] = 0;
-    WideCharToMultiByte(CP_UTF8, 0, stem, -1, g_stem8, sizeof g_stem8, 0, 0);
+    // foo_x64.clap -> the plugin foo.dll in the same folder (the bridge is part of the CLAP); id and fallback name from foo
+    if (slash) { wchar_t keep = *slash; *slash = 0; wcsncpy(g_dir, full, MAX_PATH - 1); *slash = keep; } else wcscpy(g_dir, L".");
+    wcsncpy(g_stem, g_self_name, MAX_PATH - 1); g_stem[MAX_PATH - 1] = 0;
+    wchar_t* dot = wcsrchr(g_stem, L'.'); if (dot) *dot = 0;
+    size_t n = wcslen(g_stem);
+    if (n > 4 && (!_wcsicmp(g_stem + n - 4, L"_x64") || !_wcsicmp(g_stem + n - 4, L"_x86"))) g_stem[n - 4] = 0;
+    WideCharToMultiByte(CP_UTF8, 0, g_stem, -1, g_stem8, sizeof g_stem8, 0, 0);
     make_id();
     g_inits = 1;
     return true;

@@ -1003,6 +1003,14 @@ AEffect* VSTPluginMain(AudioMasterCallback master)
 }
 
 AEffect* vb_main(AudioMasterCallback master) { return VSTPluginMain(master); }     // exported as "main" (old hosts)
+
+// the CLAP (clap.c) has this file linked in and creates the plugin through it: dir = the CLAP's folder, stem = <plugin>
+// of <plugin>.dll there (<plugin>_x64.clap -> <plugin>.dll); the CLAP needs no bridge DLL next to it
+AEffect* vb_stub_main(AudioMasterCallback master, const wchar_t* dir, const wchar_t* stem, const wchar_t* self_name)
+{
+    wcsncpy(g_dir, dir, MAX_PATH - 1); wcsncpy(g_stem, stem, MAX_PATH - 1); wcsncpy(g_self_name, self_name, MAX_PATH - 1);
+    return create(master);
+}
 int VST2BridgeStub(void) { return VB_VERSION; }                                     // marker for the patcher
 #else
 // the CLAP (clap.c) creates the plugin through these; dir = the CLAP's folder, stem = <plugin> of <plugin>.dll there
