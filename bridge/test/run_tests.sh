@@ -16,13 +16,19 @@ i686-w64-mingw32-gcc   $CF -shared -o "$T/fake32.dll" test/fakevst.c -static-lib
 x86_64-w64-mingw32-gcc $CF -shared -o "$T/fake64.dll" test/fakevst.c -static-libgcc -s
 i686-w64-mingw32-gcc   $CF -o "$T/testhost32.exe" test/testhost.c -static -s
 x86_64-w64-mingw32-gcc $CF -o "$T/testhost64.exe" test/testhost.c -static -s
-# the layout the patcher writes: the bridge and its helper next to the plugin
+i686-w64-mingw32-gcc   $CF -o "$T/testclap32.exe" test/testclap.c -static -s
+x86_64-w64-mingw32-gcc $CF -o "$T/testclap64.exe" test/testclap.c -static -s
+# the layout the patcher writes: the bridges (VST2 and CLAP) and the helper next to the plugin
 mkdir -p "$T/a" "$T/b"
-cp "$T/fake32.dll" "$T/a/fake.dll"; cp vst2bridge-x64.dll "$T/a/fake_x64.dll"; cp vst2bridge-host32.exe "$T/a/"
-cp "$T/fake64.dll" "$T/b/fake.dll"; cp vst2bridge-x86.dll "$T/b/fake_x86.dll"; cp vst2bridge-host64.exe "$T/b/"
+cp "$T/fake32.dll" "$T/a/fake.dll"; cp vst2bridge-x64.dll "$T/a/fake_x64.dll"; cp vst2bridge-x64.clap "$T/a/fake_x64.clap"; cp vst2bridge-host32.exe "$T/a/"
+cp "$T/fake64.dll" "$T/b/fake.dll"; cp vst2bridge-x86.dll "$T/b/fake_x86.dll"; cp vst2bridge-x86.clap "$T/b/fake_x86.clap"; cp vst2bridge-host64.exe "$T/b/"
 st=0
 echo "== 32-bit plugin in a 64-bit host (fake_x64.dll)"
 wine "$T/testhost64.exe" "$(winepath -w "$T/a/fake_x64.dll")" || st=1
 echo "== 64-bit plugin in a 32-bit host (fake_x86.dll)"
 wine "$T/testhost32.exe" "$(winepath -w "$T/b/fake_x86.dll")" || st=1
+echo "== 32-bit plugin as CLAP in a 64-bit host (fake_x64.clap)"
+wine "$T/testclap64.exe" "$(winepath -w "$T/a/fake_x64.clap")" || st=1
+echo "== 64-bit plugin as CLAP in a 32-bit host (fake_x86.clap)"
+wine "$T/testclap32.exe" "$(winepath -w "$T/b/fake_x86.clap")" || st=1
 [ $st = 0 ] && echo "ALL BRIDGE TESTS PASSED" || { echo "BRIDGE TESTS FAILED"; exit 1; }

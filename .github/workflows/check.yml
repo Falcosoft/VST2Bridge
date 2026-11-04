@@ -44,8 +44,8 @@ jobs:
           i686-w64-mingw32-gcc -O2 -Ibridge -shared -o "$T/Input/plug32.dll" bridge/test/fakevst.c -static-libgcc -s
           x86_64-w64-mingw32-gcc -O2 -Ibridge -shared -o "$T/Input/sub/plug64.dll" bridge/test/fakevst.c -static-libgcc -s
           python3 patcher.py --cli "$T"
-          test -f "$T/Input/plug32_x64.dll" && test -f "$T/Input/vst2bridge-host32.exe"
-          test -f "$T/Input/sub/plug64_x86.dll" && test -f "$T/Input/sub/vst2bridge-host64.exe"
+          test -f "$T/Input/plug32_x64.dll" && test -f "$T/Input/plug32_x64.clap" && test -f "$T/Input/vst2bridge-host32.exe"
+          test -f "$T/Input/sub/plug64_x86.dll" && test -f "$T/Input/sub/plug64_x86.clap" && test -f "$T/Input/sub/vst2bridge-host64.exe"
           python3 patcher.py --cli "$T" | grep -c current | grep -qx 2
 
       - name: Stop Wine

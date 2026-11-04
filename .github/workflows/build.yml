@@ -1,7 +1,7 @@
 name: Autobuild
 
 # Every push to main that touches the bridge or the patcher makes a release autobuild-r<N> with the Windows patcher
-# VST2Bridge-Patcher-r<N>-windows.exe (patcher.py frozen with PyInstaller; it carries the four bridge binaries and
+# VST2Bridge-Patcher-r<N>-windows.exe (patcher.py frozen with PyInstaller; it carries the six bridge binaries and
 # docs/versions.md). The tag and the asset name are a contract with utility/selfupdate.py: change them together.
 
 on:
@@ -48,7 +48,7 @@ jobs:
           set -euo pipefail
           bash bridge/test/run_tests.sh
           mkdir bin
-          cp bridge/vst2bridge-x64.dll bridge/vst2bridge-x86.dll bridge/vst2bridge-host32.exe bridge/vst2bridge-host64.exe bin/
+          cp bridge/vst2bridge-x64.dll bridge/vst2bridge-x86.dll bridge/vst2bridge-x64.clap bridge/vst2bridge-x86.clap bridge/vst2bridge-host32.exe bridge/vst2bridge-host64.exe bin/
           file bin/*
 
       - name: Stop Wine
@@ -173,10 +173,10 @@ jobs:
 
             **INSTRUCTIONS**
             - Put the patcher into a folder with your VST2 plugin DLLs (subfolders are fine), or start it anywhere and choose the plugin folder.
-            - Click **Create bridges**. Next to every plugin the patcher writes a bridge:
-              - 32-bit plugin `syxg50.dll` → `syxg50_x64.dll` (for 64-bit hosts) + `vst2bridge-host32.exe`
-              - 64-bit plugin `Emu-SC8850.dll` → `Emu-SC8850_x86.dll` (for 32-bit hosts) + `vst2bridge-host64.exe`
-            - Load the bridge in your host like any plugin. Keep the original plugin and the helper exe in the same folder.
+            - Click **Create bridges**. Next to every plugin the patcher writes a VST2 bridge and a CLAP bridge:
+              - 32-bit plugin `syxg50.dll` → `syxg50_x64.dll` + `syxg50_x64.clap` (for 64-bit hosts) + `vst2bridge-host32.exe`
+              - 64-bit plugin `Emu-SC8850.dll` → `Emu-SC8850_x86.dll` + `Emu-SC8850_x86.clap` (for 32-bit hosts) + `vst2bridge-host64.exe`
+            - Load the bridge in your host like any plugin (the `.dll` as VST2, the `.clap` as CLAP; let the CLAP host scan the plugin folder). Keep the original plugin, both bridge files and the helper exe in the same folder.
 
             **WHAT'S NEW**
             - See the [version history](https://github.com/NightFright2k19/VST2Bridge/blob/main/docs/versions.md); the patcher shows it with **What's new?**.

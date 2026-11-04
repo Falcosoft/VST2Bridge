@@ -18,6 +18,8 @@ class PEInfo :
     @property
     def is_bridge(self) -> bool : return 'VST2BridgeStub' in self.exports
     @property
+    def is_clap_bridge(self) -> bool : return 'VST2BridgeClap' in self.exports     # our CLAP bridge (<name>_x64.clap)
+    @property
     def is_jbridge(self) -> bool : return 'JBridgeBootstrap' in self.exports       # JBridge's own bridge files
 
 def read(path : Path) -> PEInfo :
