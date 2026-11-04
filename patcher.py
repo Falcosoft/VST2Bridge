@@ -1,9 +1,10 @@
-# VST2Bridge Patcher: finds VST2 plugins and writes a bridge next to each, so that the plugin works in hosts of the
-# other bitness (32-bit plugin -> <name>_x64.dll for 64-bit hosts, 64-bit plugin -> <name>_x86.dll for 32-bit hosts).
+# VST2Bridge Patcher: finds VST2 plugins and writes bridges next to each, so that the plugin works in hosts of the
+# other bitness (32-bit plugin -> <name>_x64.dll + <name>_x64.clap for 64-bit hosts, 64-bit plugin -> <name>_x86.dll +
+# <name>_x86.clap for 32-bit hosts; the .clap is a CLAP plugin around the VST2 bridge of the same name).
 # Releases freeze this file with PyInstaller into one Windows exe (.github/workflows/build.yml) that carries the bridge
 # binaries (bridge/, built with mingw-w64) and docs/versions.md.
-# * Plugins are searched in the patcher's folder (subfolders included) or in a folder the user chooses. The bridge and
-#   its helper exe are written into the folder of each plugin (utility/bridges.py).
+# * Plugins are searched in the patcher's folder (subfolders included) or in a folder the user chooses. The bridges and
+#   their helper exe are written into the folder of each plugin (utility/bridges.py).
 # * patcher --cli [folder] [--dry-run]   the same without a window
 # * patcher --selftest [--selftest-out <file>]   checks that the bundled files are there (used by the build and the update)
 # * Update: a release patcher looks for a newer release a moment after it has started and offers it with the Update
@@ -67,7 +68,7 @@ def run_cli(args : list[str]) -> int :
     if not plugins : print('No VST2 plugins found in', folder); return 0
     fails = 0
     for pl in plugins :
-        line = f'{pl.path.relative_to(folder)} ({pl.bits}-bit) -> {pl.bridge.name} [{pl.state}]'
+        line = f'{pl.path.relative_to(folder)} ({pl.bits}-bit) -> {pl.bridge.name} + {pl.clap.name} [{pl.state}]'
         if not dry and pl.state != 'current' :
             ok = bridges.create(pl, BIN)
             fails += not ok
@@ -80,11 +81,12 @@ def selftest(out : str | None) -> int :
     import pe
     missing = bridges.binaries_ok(BIN)
     problems = list(missing)
-    for bits, (stub, helper, _) in bridges.BRIDGE.items() :
-        if stub in missing or helper in missing : continue
-        s, h = pe.read(BIN / stub), pe.read(BIN / helper)
+    for bits, (stub, helper, _, clap) in bridges.BRIDGE.items() :
+        if stub in missing or helper in missing or clap in missing : continue
+        s, h, c = pe.read(BIN / stub), pe.read(BIN / helper), pe.read(BIN / clap)
         if not (s.is_bridge and s.is_vst2 and s.bits == 96 - bits) : problems.append(stub)
         if h.bits != bits : problems.append(helper)
+        if not (c.is_clap_bridge and 'clap_entry' in c.exports and c.bits == 96 - bits) : problems.append(clap)
     if not CHANGELOG.is_file() : problems.append('docs/versions.md')
     text = f'VST2Bridge-Patcher {VERSION}'
     if out : Path(out).write_text(text + '\n')
@@ -153,7 +155,7 @@ def main_window(opts : dict) :
             try : name = str(pl.path.relative_to(st['folder']))
             except ValueError : name = str(pl.path)
             tree.insert('', 'end', iid = str(i), text = name,
-                        values = (T('bits', bits = pl.bits), T('for_bits', name = pl.bridge.name, bits = pl.target_bits), state_text(pl)))
+                        values = (T('bits', bits = pl.bits), T('for_bits', name = f'{pl.bridge.name} + .clap', bits = pl.target_bits), state_text(pl)))
         key, kw = st['status']
         status.configure(text = T(key, **kw))
         todo = [p for p in st['plugins'] if p.state in ('new', 'old')]

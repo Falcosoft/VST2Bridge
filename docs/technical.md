@@ -8,10 +8,29 @@
 |---|---|---|
 | `<name>_x64.dll` | `bridge/stub.c` (64-bit, `vst2bridge-x64.dll`) | Loaded by a 64-bit host in place of the 32-bit plugin `<name>.dll` |
 | `<name>_x86.dll` | `bridge/stub.c` (32-bit, `vst2bridge-x86.dll`) | Loaded by a 32-bit host in place of the 64-bit plugin `<name>.dll` |
+| `<name>_x64.clap` | `bridge/clap.c` (64-bit, `vst2bridge-x64.clap`) | CLAP plugin for 64-bit hosts; loads `<name>_x64.dll` |
+| `<name>_x86.clap` | `bridge/clap.c` (32-bit, `vst2bridge-x86.clap`) | CLAP plugin for 32-bit hosts; loads `<name>_x86.dll` |
 | `vst2bridge-host32.exe` | `bridge/host.c` (32-bit) | Helper that runs a 32-bit plugin |
 | `vst2bridge-host64.exe` | `bridge/host.c` (64-bit) | Helper that runs a 64-bit plugin |
 
 All bridge DLLs of one bitness are the same file; the bridge takes the plugin from its own name: it removes `.dll` and the suffix `_x64` (64-bit bridge) or `_x86` (32-bit bridge) and loads `<name>.dll` from its own folder. The helper must be in the same folder. The bridge exports `VSTPluginMain`, `main` (old hosts) and the marker `VST2BridgeStub`, by which the patcher recognises its own files (it also skips JBridge's files, which export `JBridgeBootstrap`).
+
+## CLAP bridge
+
+The CLAP bridge (`bridge/clap.c`) is a VST2 host in a CLAP plugin: it loads the VST2 file that has its own name from its own folder (`foo_x64.clap` → `foo_x64.dll`, the VST2 bridge) into the host's process and translates every CLAP call into VST2 calls. The process boundary, the helper and the passing of data are those of the VST2 bridge, unchanged. All CLAP bridges of one bitness are the same file; it exports `clap_entry` and the marker `VST2BridgeClap`.
+
+| CLAP | VST2 |
+|---|---|
+| Descriptor | Name (`effGetEffectName`, else `effGetProductString`, else the file name), vendor, version (`effGetVendorVersion`), feature `instrument` (`effFlagsIsSynth`) or `audio-effect`; id `io.github.nightfright2k19.vst2bridge.<file name without suffix, lower case>`. To read them the bridge creates the plugin once when the host first asks; that instance is handed to the first `create_plugin`, so a host that scans and then loads starts the helper only once. |
+| `activate` / `deactivate` | `effSetSampleRate`, `effSetBlockSize`, `effMainsChanged` |
+| `start_processing` / `stop_processing` | `effStartProcess` / `effStopProcess` |
+| Audio ports | VST2 channels in pairs: port 0 = channels 1-2 (main), port 1 = channels 3-4 ...; a last odd channel is a mono port |
+| Note ports | MIDI in when the plugin is a synth or answers `effCanDo receiveVstEvents` / `receiveVstMidiEvent`; MIDI out for `sendVstEvents` / `sendVstMidiEvent` |
+| `process` | CLAP MIDI, SysEx and note on / off events → `effProcessEvents` at their frame; parameter events → `setParameter` before the block; transport → `audioMasterGetTime`; `processReplacing`; MIDI and SysEx of the plugin (`audioMasterProcessEvents` during process) → output events. `reset` sends all notes off and reset controllers on 16 channels with the next block. |
+| Parameters | id = VST2 index, range 0 … 1, name `effGetParamName`, default = value after loading; text = `effGetParamDisplay` + `effGetParamLabel` for the current value (other values as a number). `audioMasterAutomate` / `BeginEdit` / `EndEdit` from the plugin become `PARAM_VALUE` / gesture events (during process directly, otherwise queued, with `request_flush`); changes the host made itself are not sent back. `audioMasterUpdateDisplay` → `params.rescan`. |
+| State | `'VBCL'`, version, kind, program, length, data: the plugin's bank chunk (`effGetChunk` / `effSetChunk`) when it has `effFlagsProgramChunks`, otherwise all parameter values |
+| Latency | `initialDelay`, read after `effMainsChanged`; a change while active (`audioMasterIOChanged`) asks the host for a restart |
+| GUI | Win32, embedded: `effEditGetRect`, `effEditOpen` with the host's window, `effEditClose`; `audioMasterSizeWindow` → `gui.request_resize`. Not resizable by the host. |
 
 ## Start
 

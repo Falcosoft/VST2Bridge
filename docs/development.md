@@ -6,8 +6,8 @@
 
 | Path | Contents |
 |---|---|
-| `bridge/` | The bridge in C: `stub.c` (bridge DLL), `host.c` (helper exe), `protocol.h` (shared memory), `marshal.h` (how each opcode's data is copied), `vst2.h` (VST 2.4 declarations written from the public interface description, no Steinberg SDK file), `stub.def` (exports), `Makefile` |
-| `bridge/test/` | `fakevst.c` (test plugin), `testhost.c` (test host), `run_tests.sh` (both directions under Wine) |
+| `bridge/` | The bridge in C: `stub.c` (bridge DLL), `clap.c` (CLAP bridge around it), `host.c` (helper exe), `protocol.h` (shared memory), `marshal.h` (how each opcode's data is copied), `vst2.h` (VST 2.4 declarations written from the public interface description, no Steinberg SDK file), `stub.def` (exports), `clap/` (CLAP headers, MIT, from the CLAP SDK), `Makefile` |
+| `bridge/test/` | `fakevst.c` (test plugin), `testhost.c` (VST2 test host), `testclap.c` (CLAP test host), `run_tests.sh` (both directions under Wine) |
 | `patcher.py`, `patcher_i18n.py` | The patcher (Tkinter window and `--cli`); texts in 29 languages (the same as SXG-Create-NF; a missing key falls back to English) |
 | `utility/bridges.py` | Finding plugins and writing bridges |
 | `utility/pe.py` | Reading machine type and exports of a DLL |
@@ -20,7 +20,7 @@ The bridge is built with mingw-w64 (cross-compiled on Linux; also works in MSYS2
 
 ```
 sudo apt install gcc-mingw-w64
-make -C bridge          # vst2bridge-x64.dll, vst2bridge-x86.dll, vst2bridge-host32.exe, vst2bridge-host64.exe
+make -C bridge          # vst2bridge-x64/x86.dll, vst2bridge-x64/x86.clap, vst2bridge-host32.exe, vst2bridge-host64.exe
 ```
 
 The patcher runs from source with Python 3.10+ and Tkinter (`python patcher.py`, or `python patcher.py --cli <folder>`); it takes the bridge files from `bridge/`.
@@ -32,7 +32,7 @@ sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install wine wi
 bash bridge/test/run_tests.sh
 ```
 
-It builds the test plugin and the test host in both bitnesses and checks both directions (32-bit plugin in a 64-bit host, 64-bit plugin in a 32-bit host): strings, structures, parameters, small and large chunks, audio with MIDI and SysEx at the right frame, long blocks, accumulating and double processing, MIDI out, callbacks from the audio thread, the GUI thread and another thread, the editor with nested and GUI-started `sizeWindow`. The workflow `check.yml` runs it on every pull request, together with the patcher's `--selftest` and `--cli`.
+It builds the test plugin and the test host in both bitnesses and checks both directions (32-bit plugin in a 64-bit host, 64-bit plugin in a 32-bit host): strings, structures, parameters, small and large chunks, audio with MIDI and SysEx at the right frame, long blocks, accumulating and double processing, MIDI out, callbacks from the audio thread, the GUI thread and another thread, the editor with nested and GUI-started `sizeWindow`. Then the CLAP test host loads the CLAP bridge in both directions: descriptor, ports, parameters (values, text, events in and out with gestures), latency, audio with MIDI, SysEx and CLAP note events, MIDI out, editor with resize requests, state, a second instance. The workflow `check.yml` runs it on every pull request, together with the patcher's `--selftest` and `--cli`.
 
 ## Releases
 
