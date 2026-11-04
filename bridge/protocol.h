@@ -5,17 +5,24 @@
 // Three channels, each a stack of call frames (calls can nest: a host call may make the plugin call back into
 // the host, which may call the plugin again ...):
 //   main   host GUI / control thread <-> helper main (window) thread. Both sides may start a call; a named
-//          mutex decides who starts the outermost one.
+//          mutex (Linux / macOS: the lock word VbChan.lock) decides who starts the outermost one.
 //   audio  host audio thread <-> helper audio thread. Only the bridge starts calls (process, and any other call
 //          made on the thread that runs process); the plugin's callbacks from its audio thread nest inside.
 //   aux    callbacks from other threads of the plugin -> bridge (one at a time).
+// Linux / macOS (the CLAP runs the helper under Wine): the block is a file that both sides map, and each signal is one
+// byte on one of four loopback TCP connections instead of a named event:
+//   M  bridge -> helper: main_h        helper -> bridge: main_s, ready
+//   V                                  helper -> bridge: main_v
+//   A  bridge -> helper: audio_h       helper -> bridge: audio_s
+//   X  bridge -> helper: aux_h         helper -> bridge: aux_s
+// Large chunks go through files of their own (the frame names the file).
 #ifndef VB_PROTOCOL_H
 #define VB_PROTOCOL_H
 #include <stdint.h>
 #include "vst2.h"
 
 #define VB_MAGIC        0x56324252u     // 'V2BR'
-#define VB_VERSION      1
+#define VB_VERSION      2
 #define VB_MAXDEPTH     8               // nested calls per channel
 #define VB_FRAME_DATA   65536           // bytes passed by pointer per call (larger chunks use a mapping of their own)
 #define VB_MAXCH        32              // audio channels each way
@@ -33,10 +40,15 @@ enum {                                  // VbFrame.kind
     VB_K_PROCESS,                       // audio channel: op = VB_P_*, value = frames (data in VbAudio)
     VB_K_READ_CHUNK,                    // data = mapping name: helper copies the chunk of the last effGetChunk into it
     VB_K_QUIT,
-    VB_K_MASTER                         // helper -> bridge: audioMaster(op, index, value, data, opt)
+    VB_K_MASTER,                        // helper -> bridge: audioMaster(op, index, value, data, opt)
+    VB_K_EDITOR_SHOW                    // index 1 = show, 0 = hide the editor window (Linux / macOS CLAP)
 };
 enum { VB_P_REPLACING = 0, VB_P_ACCUMULATE, VB_P_DOUBLE };
-enum { VB_F_MAPPED = 1 };              // effSetChunk: data holds the name of a mapping with the chunk
+enum {                                  // VbFrame.flags
+    VB_F_MAPPED   = 1,                  // effSetChunk: data holds the name of a mapping (net: a file) with the chunk
+    VB_F_TOPLEVEL = 2,                  // effEditOpen (Linux): a bare window titled "VST2Bridge <token>", moved into the host's X11 window by the CLAP
+    VB_F_FLOATING = 4                   // effEditOpen (macOS): a window of its own with a title bar
+};
 
 typedef struct {
     int32_t kind, op, index, flags;
@@ -51,7 +63,7 @@ typedef struct {
     volatile int32_t depth;             // frames in use
     volatile int32_t msg;               // kind of the last message: VB_MSG_REQ (frame depth-1 waits) or VB_MSG_REPLY
     volatile int32_t owner;             // main channel: side that started the outermost call
-    int32_t pad;
+    volatile int32_t lock;              // main channel, Linux / macOS: 0 or the side that holds the lock (replaces the mutex)
     VbFrame f[VB_MAXDEPTH];
 } VbChan;
 
@@ -81,7 +93,7 @@ typedef struct {
 typedef struct {
     uint32_t magic, version;
     int32_t  ok;                        // set by the helper before "ready": 1 = plugin loaded
-    int32_t  pad;
+    volatile int32_t editor_closed;     // the user closed the floating editor window (macOS); the CLAP tells the host
     char     error[256];
     VbInfo   info;
     VbChan   main, audio, aux;

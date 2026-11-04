@@ -1,8 +1,12 @@
-# VST2Bridge Patcher: finds VST2 plugins and writes bridges next to each, so that the plugin works in hosts of the
-# other bitness (32-bit plugin -> <name>_x64.dll + <name>_x64.clap for 64-bit hosts, 64-bit plugin -> <name>_x86.dll +
-# <name>_x86.clap for 32-bit hosts; the .clap is a CLAP plugin around the VST2 bridge of the same name).
-# Releases freeze this file with PyInstaller into one Windows exe (.github/workflows/build.yml) that carries the bridge
-# binaries (bridge/, built with mingw-w64) and docs/versions.md.
+# VST2Bridge Patcher: finds VST2 plugins and writes bridges next to each.
+# * Windows: the plugin works in hosts of the other bitness (32-bit plugin -> <name>_x64.dll + <name>_x64.clap for
+#   64-bit hosts, 64-bit plugin -> <name>_x86.dll + <name>_x86.clap for 32-bit hosts; the .clap is a CLAP plugin around
+#   the VST2 bridge of the same name).
+# * Linux and macOS: CLAP only, <name>.clap (macOS: a bundle) + the helper of the plugin's bitness; the CLAP runs the
+#   Windows plugin under Wine.
+# Releases freeze this file with PyInstaller for each system (.github/workflows/build.yml); each patcher carries the
+# bridge files of its system (bridge/: mingw-w64 for the Windows files and helpers, gcc / clang for the Linux / macOS
+# CLAP) and docs/versions.md.
 # * Plugins are searched in the patcher's folder (subfolders included) or in a folder the user chooses. The bridges and
 #   their helper exe are written into the folder of each plugin (utility/bridges.py).
 # * patcher --cli [folder] [--dry-run]   the same without a window
@@ -11,11 +15,13 @@
 #   button (utility/selfupdate.py); --no-update-check (or VB_NO_UPDATE_CHECK=1) leaves out the check at the start.
 #   Test options: --update-dir <folder with release files>, --update-test-version r<N>; --after-update <old> is used by
 #   the update itself.
-import sys, os, threading, queue, locale
+import sys, os, threading, queue, locale, subprocess
 from pathlib import Path
 
 FROZEN = getattr(sys, 'frozen', False)
 HERE = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
+if FROZEN and sys.platform == 'darwin' and HERE.parent.name == 'Contents' :
+    HERE = HERE.parents[2]                      # VST2Bridge-Patcher.app/Contents/MacOS -> folder holding the .app
 CODE = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
 BIN = CODE / 'bin' if FROZEN else CODE / 'bridge'          # the bridge binaries (dev: built by `make -C bridge`)
 CHANGELOG = CODE / 'docs' / 'versions.md'
@@ -32,6 +38,11 @@ def system_language(known) -> str :
         try :
             import ctypes
             names.append(locale.windows_locale.get(ctypes.windll.kernel32.GetUserDefaultUILanguage(), ''))
+        except Exception : pass
+    elif sys.platform == 'darwin' :                 # apps started from the Finder get no LANG
+        try :
+            out = subprocess.run(['defaults', 'read', '-g', 'AppleLanguages'], capture_output = True, text = True, timeout = 3).stdout
+            names += [x.strip(' "(),\n') for x in out.split('\n') if x.strip(' "(),\n')]
         except Exception : pass
     for var in ('LC_ALL', 'LC_MESSAGES', 'LANG', 'LANGUAGE') :
         if os.environ.get(var) : names.append(os.environ[var])
@@ -67,8 +78,9 @@ def run_cli(args : list[str]) -> int :
     plugins = bridges.scan(folder, BIN, log = lambda m : print('  skipped:', m))
     if not plugins : print('No VST2 plugins found in', folder); return 0
     fails = 0
+    if bridges.SYSTEM != 'windows' and not bridges.wine_found() : print('note: Wine was not found; the CLAP bridges need it')
     for pl in plugins :
-        line = f'{pl.path.relative_to(folder)} ({pl.bits}-bit) -> {pl.bridge.name} + {pl.clap.name} [{pl.state}]'
+        line = f'{pl.path.relative_to(folder)} ({pl.bits}-bit) -> {pl.bridge.name + " + " if pl.bridge else ""}{pl.clap.name} [{pl.state}]'
         if not dry and pl.state != 'current' :
             ok = bridges.create(pl, BIN)
             fails += not ok
@@ -76,17 +88,32 @@ def run_cli(args : list[str]) -> int :
         print(line)
     return 1 if fails else 0
 
+def macho_archs(data : bytes) -> set[int] :
+    """CPU types in a (universal) Mach-O file: 0x0100000C arm64, 0x01000007 x86_64."""
+    import struct
+    if data[:4] == b'\xca\xfe\xba\xbe' :
+        n = struct.unpack_from('>I', data, 4)[0]
+        return {struct.unpack_from('>I', data, 8 + 20 * i)[0] for i in range(min(n, 16))}
+    return {struct.unpack_from('<I', data, 4)[0]} if data[:4] == b'\xcf\xfa\xed\xfe' else set()
+
 def selftest(out : str | None) -> int :
     attach_console()
     import pe
     missing = bridges.binaries_ok(BIN)
     problems = list(missing)
-    for bits, (stub, helper, _, clap) in bridges.BRIDGE.items() :
-        if stub in missing or helper in missing or clap in missing : continue
-        s, h, c = pe.read(BIN / stub), pe.read(BIN / helper), pe.read(BIN / clap)
-        if not (s.is_bridge and s.is_vst2 and s.bits == 96 - bits) : problems.append(stub)
-        if h.bits != bits : problems.append(helper)
-        if not (c.is_clap_bridge and 'clap_entry' in c.exports and c.bits == 96 - bits) : problems.append(clap)
+    for bits, helper in bridges.HELPER.items() :
+        if helper not in missing and pe.read(BIN / helper).bits != bits : problems.append(helper)
+    if bridges.SYSTEM == 'windows' :
+        for bits, (stub, helper, _, clap) in bridges.BRIDGE.items() :
+            if stub in missing or clap in missing : continue
+            s, c = pe.read(BIN / stub), pe.read(BIN / clap)
+            if not (s.is_bridge and s.is_vst2 and s.bits == 96 - bits) : problems.append(stub)
+            if not (c.is_clap_bridge and 'clap_entry' in c.exports and c.bits == 96 - bits) : problems.append(clap)
+    elif bridges.POSIX_CLAP[bridges.SYSTEM] not in missing :
+        name, data = bridges.POSIX_CLAP[bridges.SYSTEM], bridges.clap_bytes(BIN)
+        if bridges.SYSTEM == 'linux' : kind_ok = data[:4] == b'\x7fELF' and data[18:20] == b'\x3e\x00'           # x86-64
+        else : kind_ok = macho_archs(data) == {0x0100000C, 0x01000007}                                          # arm64 + x86_64
+        if not (kind_ok and bridges.MARKER in data and b'clap_entry' in data) : problems.append(name)
     if not CHANGELOG.is_file() : problems.append('docs/versions.md')
     text = f'VST2Bridge-Patcher {VERSION}'
     if out : Path(out).write_text(text + '\n')
@@ -146,7 +173,7 @@ def main_window(opts : dict) :
 
     def refresh() :
         root.title(f'VST2Bridge Patcher {VERSION}')
-        intro.configure(text = T('intro')); folder_lbl.configure(text = T('folder')); folder_val.configure(text = str(st['folder']))
+        intro.configure(text = T('intro') if bridges.SYSTEM == 'windows' else T('intro_posix')); folder_lbl.configure(text = T('folder')); folder_val.configure(text = str(st['folder']))
         browse.configure(text = T('browse')); rescan.configure(text = T('rescan')); create_btn.configure(text = T('create'))
         log_btn.configure(text = T('changelog')); upd_btn.configure(text = T('upd_btn'))
         for c, k in (('#0', 'col_plugin'), ('type', 'col_type'), ('bridge', 'col_bridge'), ('state', 'col_state')) : tree.heading(c, text = T(k))
@@ -155,7 +182,7 @@ def main_window(opts : dict) :
             try : name = str(pl.path.relative_to(st['folder']))
             except ValueError : name = str(pl.path)
             tree.insert('', 'end', iid = str(i), text = name,
-                        values = (T('bits', bits = pl.bits), T('for_bits', name = f'{pl.bridge.name} + .clap', bits = pl.target_bits), state_text(pl)))
+                        values = (T('bits', bits = pl.bits), T('for_bits', name = pl.label, bits = pl.target_bits), state_text(pl)))
         key, kw = st['status']
         status.configure(text = T(key, **kw))
         todo = [p for p in st['plugins'] if p.state in ('new', 'old')]
@@ -172,6 +199,7 @@ def main_window(opts : dict) :
     lang_box.bind('<<ComboboxSelected>>', set_lang)
 
     missing = bridges.binaries_ok(BIN)
+    wine_ok = bridges.SYSTEM == 'windows' or bridges.wine_found()
     def start_scan() :
         if missing : st['status'] = ('missing_bin', dict(names = ', '.join(missing))); st['busy'] = True; refresh(); return
         st.update(busy = True, plugins = [], status = ('scanning', {})); progress.configure(mode = 'indeterminate'); progress.start(12); refresh()
@@ -227,6 +255,7 @@ def main_window(opts : dict) :
                     todo = sum(p.state in ('new', 'old') for p in msg[1])
                     st['status'] = ('found', dict(n = len(msg[1]), todo = todo)) if msg[1] else ('none', {})
                     if any(p.state == 'blocked' for p in msg[1]) : st['status'] = ('blocked_hint', {})
+                    if bridges.SYSTEM != 'windows' and not wine_ok : st['status'] = ('no_wine', {})
                 elif kind == 'progress' :
                     progress.configure(value = msg[1]); st['status'] = ('creating', dict(i = msg[1], n = msg[2]))
                 elif kind == 'created' :

@@ -1,8 +1,12 @@
 name: Autobuild
 
-# Every push to main that touches the bridge or the patcher makes a release autobuild-r<N> with the Windows patcher
-# VST2Bridge-Patcher-r<N>-windows.exe (patcher.py frozen with PyInstaller; it carries the six bridge binaries and
-# docs/versions.md). The tag and the asset name are a contract with utility/selfupdate.py: change them together.
+# Every push to main that touches the bridge or the patcher makes a release autobuild-r<N> with the patchers
+# (patcher.py frozen with PyInstaller, each with the bridge files of its system and docs/versions.md):
+#   VST2Bridge-Patcher-r<N>-windows.exe              the six Windows bridge files (mingw-w64, `bridge` job)
+#   VST2Bridge-Patcher-r<N>-linux.tar.gz             vst2bridge-linux.clap (built on ubuntu-22.04 for an old glibc) + the two helpers
+#   VST2Bridge-Patcher-r<N>-macos-applesilicon.zip   vst2bridge-macos (universal, gzipped) + the two helpers
+#   VST2Bridge-Patcher-r<N>-macos-intel.zip          the same, frozen on an Intel runner
+# The tag and the asset names are a contract with utility/selfupdate.py: change them together.
 
 on:
   push:
@@ -23,7 +27,7 @@ concurrency:
 
 jobs:
   bridge:
-    name: Bridge (mingw-w64, Wine tests)
+    name: Bridge (mingw-w64, Wine tests incl. the Linux CLAP)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -36,7 +40,7 @@ jobs:
           sudo dpkg --add-architecture i386
           sudo apt-get update
           # no recommends: they pull in hundreds of MB (fonts, GStreamer ...) the tests do not need
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-mingw-w64 wine wine64 wine32:i386 xvfb xauth
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-mingw-w64 libxcb1-dev wine wine64 wine32:i386 xvfb xauth
 
       - name: Initialise Wine
         timeout-minutes: 5
@@ -86,9 +90,17 @@ jobs:
             console.log(`Next autobuild: r${max + 1}`);
 
   build:
-    name: Windows patcher
+    name: Patcher ${{ matrix.label }}
     needs: [version, bridge]
-    runs-on: windows-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: windows-latest, label: Windows,             asset: windows }
+          - { os: ubuntu-22.04,   label: Linux,               asset: linux }
+          - { os: macos-15,       label: macOS Apple Silicon, asset: macos-applesilicon }
+          - { os: macos-15-intel, label: macOS Intel,         asset: macos-intel }
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         shell: bash
@@ -101,6 +113,26 @@ jobs:
         with:
           name: bridge-bin
           path: bin
+
+      - name: Linux CLAP (the Windows bridges are not part of the Linux patcher)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y libxcb1-dev
+          make -C bridge linux
+          cp bridge/vst2bridge-linux.clap bin/
+          rm -f bin/*.dll bin/vst2bridge-x64.clap bin/vst2bridge-x86.clap
+          file bin/*
+
+      - name: macOS CLAP (the Windows bridges are not part of the macOS patcher)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          make -C bridge macos
+          lipo -info bridge/vst2bridge-macos
+          gzip -9 -c bridge/vst2bridge-macos > bin/vst2bridge-macos.gz   # gzipped: PyInstaller would thin a bare Mach-O file to the runner's architecture
+          rm -f bin/*.dll bin/vst2bridge-x64.clap bin/vst2bridge-x86.clap
+          ls -la bin
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -128,19 +160,29 @@ jobs:
 
       - name: Self test and package
         env:
-          NAME: VST2Bridge-Patcher-r${{ needs.version.outputs.revision }}-windows.exe
+          NAME: VST2Bridge-Patcher-r${{ needs.version.outputs.revision }}-${{ matrix.asset }}
         run: |
           set -euo pipefail
-          ./dist/VST2Bridge-Patcher.exe --selftest --selftest-out selftest.txt
+          case "${{ runner.os }}" in
+            Windows) EXE=dist/VST2Bridge-Patcher.exe ;;
+            Linux)   EXE=dist/VST2Bridge-Patcher ;;
+            macOS)   EXE=dist/VST2Bridge-Patcher.app/Contents/MacOS/VST2Bridge-Patcher ;;
+          esac
+          "$EXE" --selftest --selftest-out selftest.txt
           cat selftest.txt
           grep -q "r${{ needs.version.outputs.revision }}" selftest.txt
           mkdir upload
-          cp dist/VST2Bridge-Patcher.exe "upload/$NAME"
+          case "${{ runner.os }}" in
+            Windows) cp dist/VST2Bridge-Patcher.exe "upload/$NAME.exe" ;;
+            Linux)   tar -C dist -czf "upload/$NAME.tar.gz" VST2Bridge-Patcher ;;
+            macOS)   ditto -c -k --keepParent dist/VST2Bridge-Patcher.app "upload/$NAME.zip" ;;
+          esac
+          ls -la upload
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: patcher-windows
+          name: patcher-${{ matrix.asset }}
           path: upload/*
           if-no-files-found: error
 
@@ -149,11 +191,15 @@ jobs:
     needs: [version, build]
     runs-on: ubuntu-24.04
     steps:
-      - name: Download patcher
+      - name: Download patchers
         uses: actions/download-artifact@v4
         with:
-          name: patcher-windows
+          pattern: patcher-*
           path: assets
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -la assets
 
       - name: Create GitHub release
         uses: ncipollo/release-action@v1
@@ -166,10 +212,12 @@ jobs:
           artifacts: assets/*
           artifactErrorsFailBuild: true
           body: |
-            The **VST2Bridge Patcher** makes 32-bit VST2 plugins usable in 64-bit hosts and 64-bit plugins in 32-bit hosts. Free for everybody (GPL-3.0).
+            The **VST2Bridge Patcher** makes 32-bit VST2 plugins usable in 64-bit hosts and 64-bit plugins in 32-bit hosts. On Linux and macOS it makes Windows VST2 plugins (32-bit and 64-bit) usable as CLAP plugins, run under Wine. Free for everybody (GPL-3.0).
 
             **DOWNLOAD**
-            - Windows: `VST2Bridge-Patcher-r<N>-windows.exe`
+            - Windows: `...-windows.exe`
+            - Linux: `...-linux.tar.gz` (extract, then run `VST2Bridge-Patcher`)
+            - macOS: `...-macos-applesilicon.zip` (M1 and newer) or `...-macos-intel.zip` (extract, then open the app)
 
             **INSTRUCTIONS**
             - Put the patcher into a folder with your VST2 plugin DLLs (subfolders are fine), or start it anywhere and choose the plugin folder.
@@ -177,6 +225,7 @@ jobs:
               - 32-bit plugin `syxg50.dll` → `syxg50_x64.dll` + `syxg50_x64.clap` (for 64-bit hosts) + `vst2bridge-host32.exe`
               - 64-bit plugin `Emu-SC8850.dll` → `Emu-SC8850_x86.dll` + `Emu-SC8850_x86.clap` (for 32-bit hosts) + `vst2bridge-host64.exe`
             - Load the bridge in your host like any plugin (the `.dll` as VST2, the `.clap` as CLAP; let the CLAP host scan the plugin folder). Keep the original plugin, both bridge files and the helper exe in the same folder.
+            - **Linux and macOS:** the patcher writes only CLAP bridges: `syxg50.dll` → `syxg50.clap` (macOS: a `.clap` bundle, signed ad hoc) + the helper of the plugin's bitness (`vst2bridge-host32.exe` or `vst2bridge-host64.exe`). The CLAP runs the Windows plugin in that helper under **Wine**, which must be installed (`wine` in the path, a usual install folder on macOS, or `VB_WINE`). The plugin's window is embedded on Linux (X11) and opens as a floating window on macOS (Wine on Apple Silicon needs Rosetta 2). Linux and macOS are not tested in real hosts yet: feedback welcome.
 
             **WHAT'S NEW**
             - See the [version history](https://github.com/NightFright2k19/VST2Bridge/blob/main/docs/versions.md); the patcher shows it with **What's new?**.
