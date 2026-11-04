@@ -1,0 +1,53 @@
+name: Check
+
+# Pull requests (and manual runs): builds the bridge with mingw-w64, runs the bridge tests in both directions under
+# Wine (bridge/test/run_tests.sh) and checks the patcher from source (syntax, --selftest, --cli on the test plugins).
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Bridge tests (Wine) and patcher
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          # no recommends: they pull in hundreds of MB (fonts, GStreamer ...) the tests do not need
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-mingw-w64 wine wine64 wine32:i386 xvfb xauth
+
+      - name: Initialise Wine
+        timeout-minutes: 5
+        run: xvfb-run -a wine wineboot -i
+
+      - name: Bridge tests
+        timeout-minutes: 10
+        run: bash bridge/test/run_tests.sh
+
+      - name: Patcher
+        run: |
+          set -euo pipefail
+          python3 -m py_compile patcher.py patcher_i18n.py utility/*.py
+          python3 patcher.py --selftest
+          T="$(mktemp -d)"; mkdir -p "$T/Input/sub"
+          i686-w64-mingw32-gcc -O2 -Ibridge -shared -o "$T/Input/plug32.dll" bridge/test/fakevst.c -static-libgcc -s
+          x86_64-w64-mingw32-gcc -O2 -Ibridge -shared -o "$T/Input/sub/plug64.dll" bridge/test/fakevst.c -static-libgcc -s
+          python3 patcher.py --cli "$T"
+          test -f "$T/Input/plug32_x64.dll" && test -f "$T/Input/vst2bridge-host32.exe"
+          test -f "$T/Input/sub/plug64_x86.dll" && test -f "$T/Input/sub/vst2bridge-host64.exe"
+          python3 patcher.py --cli "$T" | grep -c current | grep -qx 2
+
+      - name: Stop Wine
+        if: always()
+        run: wineserver -k || true          # leftover Wine processes make the job hang in its cleanup

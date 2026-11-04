@@ -1,0 +1,43 @@
+# Texts of the patcher window. English is the fallback for every key; add a language by adding a dict.
+LANGUAGES = {'en' : 'English', 'de' : 'Deutsch'}
+
+TEXT = {
+'en' : {
+    'intro' : 'Makes 32-bit VST2 plugins usable in 64-bit hosts and 64-bit plugins in 32-bit hosts.',
+    'folder' : 'Plugin folder:', 'browse' : 'Choose…', 'rescan' : 'Scan again',
+    'col_plugin' : 'Plugin', 'col_type' : 'Plugin type', 'col_bridge' : 'Bridge (for hosts)', 'col_state' : 'Status',
+    'bits' : '{bits}-bit', 'for_bits' : '{name} ({bits}-bit)',
+    'st_new' : 'new', 'st_current' : 'up to date', 'st_old' : 'update', 'st_blocked' : 'name taken', 'st_error' : 'error: {err}',
+    'scanning' : 'Looking for VST2 plugins…',
+    'found' : '{n} plugin(s) found, {todo} to write.',
+    'none' : 'No VST2 plugins found. Put the plugin DLLs into this folder (subfolders are fine) or choose another folder.',
+    'create' : 'Create bridges', 'creating' : 'Writing bridge {i} of {n}…',
+    'done' : '{ok} bridge(s) written next to the plugins.', 'done_fail' : '{ok} bridge(s) written, {fail} failed (see the list).',
+    'blocked_hint' : 'A file that is not a bridge already has the bridge name; it is left alone.',
+    'missing_bin' : 'The patcher is incomplete: {names} missing.',
+    'changelog' : "What's new?", 'changelog_title' : 'Changelog',
+    'upd_btn' : 'Update', 'upd_checking' : 'Looking for updates…', 'upd_current' : 'The patcher is up to date.',
+    'upd_new' : 'Version {ver} is available.', 'upd_ask' : 'Download and start {ver} now?',
+    'upd_load' : 'Downloading the update… {pct}', 'upd_verify' : 'Checking the update…',
+    'upd_error' : 'Update check failed: {err}', 'upd_failed' : 'Update failed: {err}', 'upd_done' : 'Updated from {old}.',
+},
+'de' : {
+    'intro' : 'Macht 32-Bit-VST2-Plugins in 64-Bit-Hosts nutzbar und 64-Bit-Plugins in 32-Bit-Hosts.',
+    'folder' : 'Plugin-Ordner:', 'browse' : 'Auswählen…', 'rescan' : 'Neu suchen',
+    'col_plugin' : 'Plugin', 'col_type' : 'Plugin-Typ', 'col_bridge' : 'Bridge (für Hosts)', 'col_state' : 'Status',
+    'bits' : '{bits} Bit', 'for_bits' : '{name} ({bits} Bit)',
+    'st_new' : 'neu', 'st_current' : 'aktuell', 'st_old' : 'erneuern', 'st_blocked' : 'Name belegt', 'st_error' : 'Fehler: {err}',
+    'scanning' : 'Suche VST2-Plugins…',
+    'found' : '{n} Plugin(s) gefunden, {todo} zu schreiben.',
+    'none' : 'Keine VST2-Plugins gefunden. Lege die Plugin-DLLs in diesen Ordner (Unterordner gehen auch) oder wähle einen anderen Ordner.',
+    'create' : 'Bridges erstellen', 'creating' : 'Schreibe Bridge {i} von {n}…',
+    'done' : '{ok} Bridge(s) neben die Plugins geschrieben.', 'done_fail' : '{ok} Bridge(s) geschrieben, {fail} fehlgeschlagen (siehe Liste).',
+    'blocked_hint' : 'Eine Datei, die keine Bridge ist, trägt schon den Bridge-Namen; sie bleibt unangetastet.',
+    'missing_bin' : 'Der Patcher ist unvollständig: {names} fehlt.',
+    'changelog' : 'Was ist neu?', 'changelog_title' : 'Änderungen',
+    'upd_btn' : 'Update', 'upd_checking' : 'Suche nach Updates…', 'upd_current' : 'Der Patcher ist aktuell.',
+    'upd_new' : 'Version {ver} ist verfügbar.', 'upd_ask' : '{ver} jetzt herunterladen und starten?',
+    'upd_load' : 'Lade das Update… {pct}', 'upd_verify' : 'Prüfe das Update…',
+    'upd_error' : 'Update-Suche fehlgeschlagen: {err}', 'upd_failed' : 'Update fehlgeschlagen: {err}', 'upd_done' : 'Aktualisiert von {old}.',
+},
+}
