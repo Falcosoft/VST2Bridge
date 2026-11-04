@@ -37,6 +37,9 @@ echo "== 32-bit plugin as CLAP in a 64-bit host (fake_x64.clap)"
 wine "$T/testclap64.exe" "$(winepath -w "$T/a/fake_x64.clap")" || st=1
 echo "== 64-bit plugin as CLAP in a 32-bit host (fake_x86.clap)"
 wine "$T/testclap32.exe" "$(winepath -w "$T/b/fake_x86.clap")" || st=1
+echo "== old instrument (no synth flag, no effCanDo) as CLAP, as Woof! checks it"
+wine "$T/testclap64.exe" "$(winepath -w "$T/a/fake_x64.clap")" plain || st=1
+wine "$T/testclap32.exe" "$(winepath -w "$T/b/fake_x86.clap")" plain || st=1
 # Linux / macOS layout: <name>.clap next to <name>.dll and the helper of the plugin's bitness
 mkdir -p "$T/l32" "$T/l64" "$T/m32"
 cp "$T/fake32.dll" "$T/l32/fake.dll"; cp vst2bridge-linux.clap "$T/l32/fake.clap"; cp vst2bridge-host32.exe "$T/l32/"
@@ -48,5 +51,8 @@ echo "== Linux CLAP, 64-bit plugin under Wine"
 "$T/testclap" "$T/l64/fake.clap" Fake64 || st=1
 echo "== macOS variant (floating editor), 32-bit plugin under Wine"
 "$T/testclap" "$T/m32/fake.clap" Fake32 floating || st=1
+echo "== Linux CLAP, old instrument (as Woof! checks it), 32-bit and 64-bit plugin"
+"$T/testclap" "$T/l32/fake.clap" Fake32 plain || st=1
+"$T/testclap" "$T/l64/fake.clap" Fake64 plain || st=1
 [ -z "$(ls /dev/shm 2>/dev/null | grep '^vst2bridge_' || true)" ] || { echo "FAIL: shared files left in /dev/shm"; st=1; }
 [ $st = 0 ] && echo "ALL BRIDGE TESTS PASSED" || { echo "BRIDGE TESTS FAILED"; exit 1; }

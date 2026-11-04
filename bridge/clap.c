@@ -81,7 +81,7 @@ typedef struct Inst {
     const clap_host_audio_ports_t* hports;
     AEffect* fx;
     float* defaults;
-    int midi_in, midi_out, active, processing, gui_made, gui_open, gui_w, gui_h;
+    int midi_in, midi_out, synth, active, processing, gui_made, gui_open, gui_w, gui_h;
     int nin, nout, ports_in, ports_out;       // VST2 channels and CLAP ports (pairs of channels) known to the host
     uint32_t latency;
     double rate;
@@ -331,7 +331,12 @@ static int inst_load(Inst* p)
     fx->resvd1 = (intptr_t)p;                 // resvd1 belongs to the host: the way back from the callback to us
     p->fx = fx;
     disp(p, effOpen, 0, 0, 0, 0);
-    p->midi_in = (fx->flags & effFlagsIsSynth) || can_do(p, "receiveVstEvents") || can_do(p, "receiveVstMidiEvent");
+    // MIDI in is always offered: VST2 hosts send MIDI to every plugin, and many plugins answer no effCanDo at all.
+    // Instrument: flagged as synth, category synth, no audio inputs, or it says it receives MIDI (old instruments
+    // such as S-YXG50 set no flag; CLAP hosts like Woof! only offer instruments).
+    p->midi_in = 1;
+    p->synth = (fx->flags & effFlagsIsSynth) || disp(p, effGetPlugCategory, 0, 0, 0, 0) == 2 /* kPlugCategSynth */
+               || (fx->numInputs == 0 && fx->numOutputs > 0) || can_do(p, "receiveVstEvents") || can_do(p, "receiveVstMidiEvent");
     p->midi_out = can_do(p, "sendVstEvents") || can_do(p, "sendVstMidiEvent");
     if (fx->numParams > 0) {
         p->defaults = (float*)calloc((size_t)fx->numParams, sizeof(float));
@@ -387,9 +392,9 @@ static void probe(void)
     snprintf(g_descr, sizeof g_descr, "%s (Windows VST2 plugin, run under Wine by VST2Bridge)", g_name);
 #endif
     int n = 0;
-    if (p->fx->flags & effFlagsIsSynth) { g_features[n++] = CLAP_PLUGIN_FEATURE_INSTRUMENT; g_features[n++] = CLAP_PLUGIN_FEATURE_SYNTHESIZER; }
+    if (p->synth) { g_features[n++] = CLAP_PLUGIN_FEATURE_INSTRUMENT; g_features[n++] = CLAP_PLUGIN_FEATURE_SYNTHESIZER; }
     else g_features[n++] = CLAP_PLUGIN_FEATURE_AUDIO_EFFECT;
-    if (p->nout == 2) g_features[n++] = CLAP_PLUGIN_FEATURE_STEREO;
+    if (p->nout >= 2) g_features[n++] = CLAP_PLUGIN_FEATURE_STEREO;           // the main output port is stereo
     else if (p->nout == 1) g_features[n++] = CLAP_PLUGIN_FEATURE_MONO;
     g_features[n] = 0;
     memset(&g_desc, 0, sizeof g_desc);
