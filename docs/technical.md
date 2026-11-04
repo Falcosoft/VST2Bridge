@@ -21,11 +21,11 @@ The CLAP bridge (`bridge/clap.c`) is a VST2 host in a CLAP plugin: it loads the 
 
 | CLAP | VST2 |
 |---|---|
-| Descriptor | Name (`effGetEffectName`, else `effGetProductString`, else the file name), vendor, version (`effGetVendorVersion`), feature `instrument` (`effFlagsIsSynth`) or `audio-effect`; id `io.github.nightfright2k19.vst2bridge.<file name without suffix, lower case>`. To read them the bridge creates the plugin once when the host first asks; that instance is handed to the first `create_plugin`, so a host that scans and then loads starts the helper only once. |
+| Descriptor | Name (`effGetEffectName`, else `effGetProductString`, else the file name), vendor, version (`effGetVendorVersion`), features `instrument` + `synthesizer` for an instrument (`effFlagsIsSynth`, category synth, no audio inputs, or `effCanDo receiveVstEvents` / `receiveVstMidiEvent`; old instruments set no flag) or `audio-effect`, plus `stereo` / `mono` for the main output; id `io.github.nightfright2k19.vst2bridge.<file name without suffix, lower case>`. To read them the bridge creates the plugin once when the host first asks; that instance is handed to the first `create_plugin`, so a host that scans and then loads starts the helper only once. |
 | `activate` / `deactivate` | `effSetSampleRate`, `effSetBlockSize`, `effMainsChanged` |
 | `start_processing` / `stop_processing` | `effStartProcess` / `effStopProcess` |
 | Audio ports | VST2 channels in pairs: port 0 = channels 1-2 (main), port 1 = channels 3-4 ...; a last odd channel is a mono port |
-| Note ports | MIDI in when the plugin is a synth or answers `effCanDo receiveVstEvents` / `receiveVstMidiEvent`; MIDI out for `sendVstEvents` / `sendVstMidiEvent` |
+| Note ports | MIDI in always (VST2 hosts send MIDI to every plugin, and many plugins answer no `effCanDo`); MIDI out for `sendVstEvents` / `sendVstMidiEvent` |
 | `process` | CLAP MIDI, SysEx and note on / off events → `effProcessEvents` at their frame; parameter events → `setParameter` before the block; transport → `audioMasterGetTime`; `processReplacing`; MIDI and SysEx of the plugin (`audioMasterProcessEvents` during process) → output events. `reset` sends all notes off and reset controllers on 16 channels with the next block. |
 | Parameters | id = VST2 index, range 0 … 1, name `effGetParamName`, default = value after loading; text = `effGetParamDisplay` + `effGetParamLabel` for the current value (other values as a number). `audioMasterAutomate` / `BeginEdit` / `EndEdit` from the plugin become `PARAM_VALUE` / gesture events (during process directly, otherwise queued, with `request_flush`); changes the host made itself are not sent back. `audioMasterUpdateDisplay` → `params.rescan`. |
 | State | `'VBCL'`, version, kind, program, length, data: the plugin's bank chunk (`effGetChunk` / `effSetChunk`) when it has `effFlagsProgramChunks`, otherwise all parameter values |
@@ -78,6 +78,25 @@ Plugin → host: value-only calls (`audioMasterAutomate`, `Version`, `Idle`, `IO
 ## Audio
 
 `processReplacing`, `process` (accumulating) and `processDoubleReplacing` all go through the audio channel: the inputs (up to 32 channels), the events queued by `effProcessEvents` and the frame count go into shared memory, the helper calls `effProcessEvents` and the plugin's process function, and the outputs come back. Blocks longer than 4096 frames are split; events are given to the piece they fall into. A plugin without `processReplacing` is run with `process` into cleared buffers. A call costs one round trip between the processes (two event signals).
+
+## Sample rates
+
+Some plugins play correctly only at the usual rates (S-YXG50 at 32000 Hz plays at the wrong pitch). When the host sets a rate other than 44100, 48000, 88200, 96000, 176400 or 192000 Hz (e.g. 32000, 22050, 11025 Hz), the helper runs the plugin at 44100 Hz and converts:
+
+- inputs are interpolated from the host's rate to the plugin's, outputs back (cubic interpolation, 3 samples of delay each; the reported `initialDelay` includes them and is given in host samples),
+- MIDI and SysEx go to the plugin frame that matches their host frame; MIDI from the plugin is moved back to host frames,
+- `audioMasterGetSampleRate` answers the plugin's rate and `audioMasterGetTime` gives it with the position in plugin samples; `effSetBlockSize` is scaled (the helper renders at most 512 host frames at once).
+
+`vst2bridge.ini` in the plugin's folder overrides the choice, per plugin (`[<plugin file name without .dll>]`) or for all plugins in the folder (`[Default]`):
+
+```
+[syxg50]
+SampleRate=48000   ; the plugin always runs at 48000 Hz (any host rate is converted)
+[Default]
+SampleRate=0       ; never convert: the plugin gets the host's rate
+```
+
+The bridge DLL and the CLAP bridge both use it, because it happens in the helper.
 
 ## Failure
 

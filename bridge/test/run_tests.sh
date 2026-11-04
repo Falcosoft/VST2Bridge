@@ -31,4 +31,7 @@ echo "== 32-bit plugin as CLAP in a 64-bit host (fake_x64.clap)"
 wine "$T/testclap64.exe" "$(winepath -w "$T/a/fake_x64.clap")" || st=1
 echo "== 64-bit plugin as CLAP in a 32-bit host (fake_x86.clap)"
 wine "$T/testclap32.exe" "$(winepath -w "$T/b/fake_x86.clap")" || st=1
+echo "== old instrument (no synth flag, no effCanDo) as CLAP, as Woof! checks it"
+wine "$T/testclap64.exe" "$(winepath -w "$T/a/fake_x64.clap")" plain || st=1
+wine "$T/testclap32.exe" "$(winepath -w "$T/b/fake_x86.clap")" plain || st=1
 [ $st = 0 ] && echo "ALL BRIDGE TESTS PASSED" || { echo "BRIDGE TESTS FAILED"; exit 1; }
