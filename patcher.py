@@ -34,8 +34,10 @@ def system_language(known) -> str :
         except Exception : pass
     for var in ('LC_ALL', 'LC_MESSAGES', 'LANG', 'LANGUAGE') :
         if os.environ.get(var) : names.append(os.environ[var])
+    alias = {'iw' : 'he', 'in' : 'id', 'pes' : 'fa'}         # old codes some systems report
     for n in names :
         code = n.replace('-', '_').split('_')[0].split('.')[0].lower()
+        code = alias.get(code, code)
         if code in known : return code
     return 'en'
 
@@ -111,9 +113,10 @@ def main_window(opts : dict) :
     head = ttk.Frame(frame); head.grid(row = 0, column = 0, sticky = 'ew')
     ttk.Label(head, text = 'VST2Bridge Patcher', font = ('TkDefaultFont', 13, 'bold')).pack(side = 'left')
     lang_var = tk.StringVar(value = LANGUAGES[st['lang']])
-    lang_box = ttk.Combobox(head, textvariable = lang_var, values = list(LANGUAGES.values()), state = 'readonly', width = 12)
+    lang_box = ttk.Combobox(head, textvariable = lang_var, values = list(LANGUAGES.values()), state = 'readonly', width = 16,
+                            height = len(LANGUAGES))
     lang_box.pack(side = 'right')
-    intro = ttk.Label(frame); intro.grid(row = 1, column = 0, sticky = 'w', pady = (2, 8))
+    intro = ttk.Label(frame, wraplength = 640, justify = 'left'); intro.grid(row = 1, column = 0, sticky = 'w', pady = (2, 8))
     fbox = ttk.Frame(frame); fbox.grid(row = 2, column = 0, sticky = 'ew')
     fbox.columnconfigure(1, weight = 1)
     folder_lbl = ttk.Label(fbox); folder_lbl.grid(row = 0, column = 0, sticky = 'w')
@@ -122,7 +125,7 @@ def main_window(opts : dict) :
     rescan = ttk.Button(fbox); rescan.grid(row = 0, column = 3)
     cols = ('type', 'bridge', 'state')
     tree = ttk.Treeview(frame, columns = cols, height = 10)
-    tree.column('#0', width = 240); tree.column('type', width = 90, anchor = 'center')
+    tree.column('#0', width = 240); tree.column('type', width = 110, anchor = 'center')
     tree.column('bridge', width = 250); tree.column('state', width = 120)
     tree.grid(row = 3, column = 0, sticky = 'nsew', pady = (8, 0))
     sb = ttk.Scrollbar(frame, orient = 'vertical', command = tree.yview); sb.grid(row = 3, column = 1, sticky = 'ns', pady = (8, 0))

@@ -18,7 +18,7 @@ The patcher writes a small bridge DLL next to each plugin. The host loads the br
 3. The patcher finds the plugins and tells whether each is 32-bit or 64-bit. Click **Create bridges**.
 4. Load `<plugin>_x64.dll` in a 64-bit host or `<plugin>_x86.dll` in a 32-bit host. Keep the original plugin and the helper exe in the same folder.
 
-The patcher updates itself (**Update** appears when a new release is out) and shows the changes with **What's new?**. Without a window: `VST2Bridge-Patcher.exe --cli [folder]`.
+The patcher speaks 29 languages (the system language, or pick one at the top right), updates itself (**Update** appears when a new release is out) and shows the changes with **What's new?**. Without a window: `VST2Bridge-Patcher.exe --cli [folder]`.
 
 ## More documentation
 

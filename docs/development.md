@@ -8,7 +8,7 @@
 |---|---|
 | `bridge/` | The bridge in C: `stub.c` (bridge DLL), `host.c` (helper exe), `protocol.h` (shared memory), `marshal.h` (how each opcode's data is copied), `vst2.h` (VST 2.4 declarations written from the public interface description, no Steinberg SDK file), `stub.def` (exports), `Makefile` |
 | `bridge/test/` | `fakevst.c` (test plugin), `testhost.c` (test host), `run_tests.sh` (both directions under Wine) |
-| `patcher.py`, `patcher_i18n.py` | The patcher (Tkinter window and `--cli`); texts in English and German |
+| `patcher.py`, `patcher_i18n.py` | The patcher (Tkinter window and `--cli`); texts in 29 languages (the same as SXG-Create-NF; a missing key falls back to English) |
 | `utility/bridges.py` | Finding plugins and writing bridges |
 | `utility/pe.py` | Reading machine type and exports of a DLL |
 | `utility/selfupdate.py` | Self-update from the GitHub releases (adapted from SXG-Create-NF) |
