@@ -1,0 +1,4 @@
+EXPORTS
+    VSTPluginMain
+    main = vb_main
+    VST2BridgeStub

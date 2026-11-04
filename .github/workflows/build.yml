@@ -1,0 +1,201 @@
+name: Autobuild
+
+# Every push to main that touches the bridge or the patcher makes a release autobuild-r<N> with the Windows patcher
+# VST2Bridge-Patcher-r<N>-windows.exe (patcher.py frozen with PyInstaller; it carries the four bridge binaries and
+# docs/versions.md). The tag and the asset name are a contract with utility/selfupdate.py: change them together.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'patcher*.py'
+      - 'utility/**'
+      - 'bridge/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vst2bridge-autobuild
+  cancel-in-progress: false
+
+jobs:
+  bridge:
+    name: Bridge (mingw-w64, Wine tests)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64 wine wine64 wine32:i386 xvfb
+
+      - name: Initialise Wine
+        run: xvfb-run -a wine wineboot -i
+
+      - name: Build and test
+        run: |
+          set -euo pipefail
+          bash bridge/test/run_tests.sh
+          mkdir bin
+          cp bridge/vst2bridge-x64.dll bridge/vst2bridge-x86.dll bridge/vst2bridge-host32.exe bridge/vst2bridge-host64.exe bin/
+          file bin/*
+
+      - name: Upload bridge
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-bin
+          path: bin/*
+          if-no-files-found: error
+
+  version:
+    name: Determine release number
+    runs-on: ubuntu-24.04
+    outputs:
+      revision: ${{ steps.version.outputs.revision }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Next release number
+        id: version
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const releases = await github.paginate(github.rest.repos.listReleases,
+              { owner: context.repo.owner, repo: context.repo.repo, per_page: 100 });
+            let max = 0;
+            for (const r of releases) {
+              const m = r.tag_name.match(/^autobuild-r(\d+)$/);
+              if (m) max = Math.max(max, parseInt(m[1], 10));
+            }
+            core.setOutput('revision', max + 1);
+            core.setOutput('tag', `autobuild-r${max + 1}`);
+            console.log(`Next autobuild: r${max + 1}`);
+
+  build:
+    name: Windows patcher
+    needs: [version, bridge]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download bridge
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-bin
+          path: bin
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller certifi
+
+      - name: Build patcher
+        env:
+          REVISION: r${{ needs.version.outputs.revision }}
+        run: |
+          set -euo pipefail
+          echo "VERSION = '$REVISION'" > patcher_version.py
+          python -m PyInstaller --onefile --windowed --noconfirm --clean \
+            --name VST2Bridge-Patcher \
+            --paths utility --paths . \
+            --add-data "bin:bin" \
+            --add-data "docs/versions.md:docs" \
+            --hidden-import patcher_i18n --hidden-import patcher_version --hidden-import certifi \
+            --hidden-import bridges --hidden-import pe --hidden-import selfupdate \
+            patcher.py
+          ls -la dist
+
+      - name: Self test and package
+        env:
+          NAME: VST2Bridge-Patcher-r${{ needs.version.outputs.revision }}-windows.exe
+        run: |
+          set -euo pipefail
+          ./dist/VST2Bridge-Patcher.exe --selftest --selftest-out selftest.txt
+          cat selftest.txt
+          grep -q "r${{ needs.version.outputs.revision }}" selftest.txt
+          mkdir upload
+          cp dist/VST2Bridge-Patcher.exe "upload/$NAME"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: patcher-windows
+          path: upload/*
+          if-no-files-found: error
+
+  release:
+    name: Create release
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download patcher
+        uses: actions/download-artifact@v4
+        with:
+          name: patcher-windows
+          path: assets
+
+      - name: Create GitHub release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ needs.version.outputs.tag }}
+          commit: ${{ github.sha }}
+          name: Autobuild r${{ needs.version.outputs.revision }}
+          prerelease: false
+          makeLatest: true
+          artifacts: assets/*
+          artifactErrorsFailBuild: true
+          body: |
+            The **VST2Bridge Patcher** makes 32-bit VST2 plugins usable in 64-bit hosts and 64-bit plugins in 32-bit hosts. Free for everybody (GPL-3.0).
+
+            **DOWNLOAD**
+            - Windows: `VST2Bridge-Patcher-r<N>-windows.exe`
+
+            **INSTRUCTIONS**
+            - Put the patcher into a folder with your VST2 plugin DLLs (subfolders are fine), or start it anywhere and choose the plugin folder.
+            - Click **Create bridges**. Next to every plugin the patcher writes a bridge:
+              - 32-bit plugin `syxg50.dll` → `syxg50_x64.dll` (for 64-bit hosts) + `vst2bridge-host32.exe`
+              - 64-bit plugin `Emu-SC8850.dll` → `Emu-SC8850_x86.dll` (for 32-bit hosts) + `vst2bridge-host64.exe`
+            - Load the bridge in your host like any plugin. Keep the original plugin and the helper exe in the same folder.
+
+            **WHAT'S NEW**
+            - See the [version history](https://github.com/NightFright2k19/VST2Bridge/blob/main/docs/versions.md); the patcher shows it with **What's new?**.
+
+  history:
+    name: Version history
+    needs: [version, release]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Number the "next" rows in docs/versions.md
+        env:
+          REVISION: ${{ needs.version.outputs.revision }}
+        run: |
+          set -euo pipefail
+          # Rows added since the last release are written as "| next | | ... |"; they get this release's number and date.
+          if grep -q '^| next | |' docs/versions.md; then
+            sed -i "s/^| next | |/| r${REVISION} | $(date -u +%F) |/" docs/versions.md
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add docs/versions.md
+            git commit -m "Version history: r${REVISION}" -m 'Made by the Autobuild workflow.'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi

@@ -1,0 +1,7 @@
+bridge/*.dll
+bridge/*.exe
+patcher_version.py
+__pycache__/
+build/
+dist/
+*.spec
