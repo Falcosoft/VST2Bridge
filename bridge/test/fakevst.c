@@ -20,6 +20,7 @@ static size_t chunk_len = 16;
 static HWND editor;
 static int ticks;
 static double last_tempo;
+static float rate_set, rate_asked;      // effSetSampleRate / audioMasterGetSampleRate (effGetTailSize index 0 / 1 tells them)
 static int plain;                      // FAKEVST_PLAIN=1: an old instrument (no synth flag, no effCanDo, no inputs, 4 outputs)
 
 static void midi_out(int delta, int status, int d1, int d2)
@@ -94,7 +95,8 @@ static intptr_t VSTCALL dispatch(AEffect* e, int32_t op, int32_t idx, intptr_t v
     case effMainsChanged:
         if (val) { fx.initialDelay = 64; host(&fx, audioMasterIOChanged, 0, 0, 0, 0); }
         return 0;
-    case effSetSampleRate: return 0;
+    case effSetSampleRate: rate_set = opt; rate_asked = (float)host(&fx, audioMasterGetSampleRate, 0, 0, 0, 0); return 0;
+    case effGetTailSize: return (intptr_t)(idx == 1 ? rate_asked : rate_set);
     case effSetProgram:
         if (val == 99) { HANDLE t = CreateThread(0, 0, worker, 0, 0, 0); WaitForSingleObject(t, 5000); CloseHandle(t); }
         return 0;

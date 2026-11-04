@@ -79,6 +79,25 @@ Plugin → host: value-only calls (`audioMasterAutomate`, `Version`, `Idle`, `IO
 
 `processReplacing`, `process` (accumulating) and `processDoubleReplacing` all go through the audio channel: the inputs (up to 32 channels), the events queued by `effProcessEvents` and the frame count go into shared memory, the helper calls `effProcessEvents` and the plugin's process function, and the outputs come back. Blocks longer than 4096 frames are split; events are given to the piece they fall into. A plugin without `processReplacing` is run with `process` into cleared buffers. A call costs one round trip between the processes (two event signals).
 
+## Sample rates
+
+Some plugins play correctly only at the usual rates (S-YXG50 at 32000 Hz plays at the wrong pitch). When the host sets a rate other than 44100, 48000, 88200, 96000, 176400 or 192000 Hz (e.g. 32000, 22050, 11025 Hz), the helper runs the plugin at 44100 Hz and converts:
+
+- inputs are interpolated from the host's rate to the plugin's, outputs back (cubic interpolation, 3 samples of delay each; the reported `initialDelay` includes them and is given in host samples),
+- MIDI and SysEx go to the plugin frame that matches their host frame; MIDI from the plugin is moved back to host frames,
+- `audioMasterGetSampleRate` answers the plugin's rate and `audioMasterGetTime` gives it with the position in plugin samples; `effSetBlockSize` is scaled (the helper renders at most 512 host frames at once).
+
+`vst2bridge.ini` in the plugin's folder overrides the choice, per plugin (`[<plugin file name without .dll>]`) or for all plugins in the folder (`[Default]`):
+
+```
+[syxg50]
+SampleRate=48000   ; the plugin always runs at 48000 Hz (any host rate is converted)
+[Default]
+SampleRate=0       ; never convert: the plugin gets the host's rate
+```
+
+The bridge DLL and the CLAP bridge both use it, because it happens in the helper.
+
 ## Failure
 
 If the helper ends (the plugin crashed), every waiting call returns at once; from then on the bridge outputs silence and returns 0, so the host keeps running.
