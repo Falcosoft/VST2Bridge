@@ -20,6 +20,7 @@ static size_t chunk_len = 16;
 static HWND editor;
 static int ticks;
 static double last_tempo;
+static int plain;                      // FAKEVST_PLAIN=1: an old instrument (no synth flag, no effCanDo, no inputs, 4 outputs)
 
 static void midi_out(int delta, int status, int d1, int d2)
 {
@@ -40,8 +41,8 @@ static void render(void** in, void** out, int n, int dbl)
     for (int c = 0; c < 2; c++) {
         for (int i = 0; i < n; i++) {
             float lv = (pending_delta >= 0 && i >= pending_delta) ? pending_level : level;
-            if (dbl) ((double*)out[c])[i] = ((double*)in[c])[i] * params[0] + lv;
-            else ((float*)out[c])[i] = ((float*)in[c])[i] * params[0] + lv;
+            if (dbl) ((double*)out[c])[i] = (plain ? 0 : ((double*)in[c])[i]) * params[0] + lv;
+            else ((float*)out[c])[i] = (plain ? 0 : ((float*)in[c])[i]) * params[0] + lv;
         }
     }
     if (pending_delta >= 0) { level = pending_level; pending_delta = -1; midi_out(0, 0x90, 60, 1); }
@@ -78,12 +79,13 @@ static intptr_t VSTCALL dispatch(AEffect* e, int32_t op, int32_t idx, intptr_t v
     case effGetProductString: strcpy((char*)ptr, "Bridge test"); return 1;
     case effGetVendorVersion: return 1234;
     case effGetVstVersion: return 2400;
-    case effGetPlugCategory: return 2;
+    case effGetPlugCategory: return plain ? 0 : 2;
     case effGetParamName: snprintf((char*)ptr, 32, "Param%d", idx); return 0;
     case effGetParamDisplay: snprintf((char*)ptr, 32, "%.2f", idx >= 0 && idx < 3 ? params[idx] : 0); return 0;
     case effGetParamLabel: strcpy((char*)ptr, "dB"); return 0;
     case effString2Parameter: if (ptr && idx >= 0 && idx < 3) params[idx] = (float)atof((char*)ptr); return 1;
-    case effCanDo: return ptr && (!strcmp((char*)ptr, "receiveVstEvents") || !strcmp((char*)ptr, "sendVstMidiEvent")) ? 1 : -1;
+    case effCanDo: if (plain) return 0;
+        return ptr && (!strcmp((char*)ptr, "receiveVstEvents") || !strcmp((char*)ptr, "sendVstMidiEvent")) ? 1 : -1;
     case effGetParameterProperties: {
         unsigned char* p = (unsigned char*)ptr;   // stepFloat, smallStepFloat, largeStepFloat, label[64] ...
         float s = 0.125f; memcpy(p, &s, 4); strcpy((char*)p + 12, "Gain");
@@ -132,5 +134,9 @@ __declspec(dllexport) AEffect* VSTPluginMain(AudioMasterCallback m)
     fx.numPrograms = 1; fx.numParams = 3; fx.numInputs = 2; fx.numOutputs = 2;
     fx.flags = effFlagsHasEditor | effFlagsCanReplacing | effFlagsProgramChunks | effFlagsIsSynth | effFlagsCanDoubleReplacing;
     fx.uniqueID = 0x466B5673; fx.version = 1;
+    char env[8];
+    if (GetEnvironmentVariableA("FAKEVST_PLAIN", env, sizeof env) && env[0] == '1') {
+        plain = 1; fx.flags &= ~effFlagsIsSynth; fx.numInputs = 0; fx.numOutputs = 4;
+    }
     return &fx;
 }

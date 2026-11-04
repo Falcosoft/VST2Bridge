@@ -85,9 +85,59 @@ static void pump(const clap_plugin_t* pl, int ms)
     }
 }
 
+// what Woof! checks (src/i_clapmusic.c) with an old instrument plugin: no synth flag, no effCanDo answers, no audio
+// inputs, 4 outputs. Woof! only offers plugins with the features instrument + synthesizer + stereo, a MIDI note input
+// and a stereo first output port, and gives only that port to process.
+static int plain_test(const char* path)
+{
+    SetEnvironmentVariableA("FAKEVST_PLAIN", "1");          // inherited by the helper that runs fakevst
+    printf("host is %d-bit, CLAP %s, plugin without synth flag and effCanDo\n", (int)sizeof(void*) * 8, path);
+    HMODULE m = LoadLibraryA(path);
+    const clap_plugin_entry_t* entry = m ? (const clap_plugin_entry_t*)(void*)GetProcAddress(m, "clap_entry") : 0;
+    CHECK(entry && entry->init(path), "load and init");
+    if (!entry) return 1;
+    const clap_plugin_factory_t* f = (const clap_plugin_factory_t*)entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
+    const clap_plugin_descriptor_t* d = f && f->get_plugin_count(f) == 1 ? f->get_plugin_descriptor(f, 0) : 0;
+    CHECK(d != 0, "descriptor");
+    if (!d) return 1;
+    int ins = 0, syn = 0, ste = 0;
+    for (const char* const* ft = d->features; ft && *ft; ft++) {
+        ins |= !strcmp(*ft, CLAP_PLUGIN_FEATURE_INSTRUMENT); syn |= !strcmp(*ft, CLAP_PLUGIN_FEATURE_SYNTHESIZER); ste |= !strcmp(*ft, CLAP_PLUGIN_FEATURE_STEREO);
+    }
+    CHECK(ins && syn && ste, "features instrument, synthesizer, stereo");
+    clap_host_t host = { CLAP_VERSION_INIT, 0, "testclap", "VST2Bridge", "", "1", host_ext, h_restart, h_process, h_callback };
+    const clap_plugin_t* pl = f->create_plugin(f, &host, d->id);
+    CHECK(pl && pl->init(pl), "create and init");
+    if (!pl) return 1;
+    const clap_plugin_note_ports_t* np = pl->get_extension(pl, CLAP_EXT_NOTE_PORTS);
+    clap_note_port_info_t ni; memset(&ni, 0, sizeof ni);
+    CHECK(np && np->count(pl, true) == 1 && np->get(pl, 0, true, &ni) && (ni.supported_dialects & CLAP_NOTE_DIALECT_MIDI), "MIDI note input");
+    const clap_plugin_audio_ports_t* ap = pl->get_extension(pl, CLAP_EXT_AUDIO_PORTS);
+    clap_audio_port_info_t pi; memset(&pi, 0, sizeof pi);
+    CHECK(ap && ap->count(pl, true) == 0 && ap->count(pl, false) == 2 && ap->get(pl, 0, false, &pi) && pi.channel_count == 2
+          && pi.port_type && !strcmp(pi.port_type, CLAP_PORT_STEREO), "no audio input, first output port stereo (of 2)");
+    CHECK(pl->activate(pl, 32000, 1, 8192) && pl->start_processing(pl), "activate at 32000 Hz");
+    pl->reset(pl);
+    InEv e; OutEv o; in_init(&e); out_init(&o);
+    clap_event_midi_t on = { { sizeof on, 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, 0 }, 0, { 0x90, 60, 127 } };
+    e.ev[0] = &on.header; e.n = 1;
+    float* oc[2] = { outL, outR };
+    clap_audio_buffer_t out = { oc, 0, 2, 0, 0 };
+    clap_process_t pr; memset(&pr, 0, sizeof pr);
+    pr.frames_count = 256; pr.steady_time = -1; pr.audio_outputs = &out; pr.audio_outputs_count = 1;
+    pr.in_events = &e.in; pr.out_events = &o.out;
+    pl->process(pl, &pr);
+    CHECK(fabsf(outL[10] - 1.0f) < 1e-6f && fabsf(outR[255] - 1.0f) < 1e-6f, "note plays with only the first output port given: %f", outL[10]);
+    pl->stop_processing(pl); pl->deactivate(pl); pl->destroy(pl);
+    entry->deinit();
+    printf("RESULT: %s (%d failures)\n", fails ? "FAILED" : "PASSED", fails);
+    return fails;
+}
+
 int main(int argc, char** argv)
 {
-    if (argc < 2) { printf("usage: testclap <bridge.clap>\n"); return 99; }
+    if (argc < 2) { printf("usage: testclap <bridge.clap> [plain]\n"); return 99; }
+    if (argc > 2 && !strcmp(argv[2], "plain")) return plain_test(argv[1]);
     const char* other = sizeof(void*) == 8 ? "Fake32" : "Fake64";
     printf("host is %d-bit, CLAP %s\n", (int)sizeof(void*) * 8, argv[1]);
     HMODULE m = LoadLibraryA(argv[1]);
