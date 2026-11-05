@@ -432,14 +432,14 @@ _X = {
 
 # Texts of the input / output folders, the plugin checkboxes and the Windows output format (#9). Only English and German so
 # far; the other languages show the English text until they are translated.
-NEW_KEYS = ('folders', 'add_folder', 'output', 'out_format', 'fmt_both', 'fmt_vst2', 'fmt_clap', 'st_dup', 'none_input', 'done_out')
+NEW_KEYS = ('folders', 'add_folder', 'output', 'out_format', 'fmt_both', 'fmt_vst2', 'fmt_clap', 'st_dup', 'none_input', 'done_out', 'out_change')
 _N = {
 'en' : ('Search in:', 'Add folder…', 'Output folder:', 'Output format:', 'VST2 + CLAP', 'VST2 only', 'CLAP only', 'name taken',
         'No VST2 plugins found. Put the plugin DLLs into the "input" folder next to the patcher (subfolders are fine) or add another folder.',
-        '{ok} plugin(s) written to {out}.'),
+        '{ok} plugin(s) written to {out}.', 'Change…'),
 'de' : ('Suchen in:', 'Ordner hinzufügen…', 'Ausgabeordner:', 'Ausgabeformat:', 'VST2 + CLAP', 'Nur VST2', 'Nur CLAP', 'Name doppelt',
         'Keine VST2-Plugins gefunden. Legen Sie die Plugin-DLLs in den Ordner "input" neben dem Patcher (Unterordner gehen auch) oder fügen Sie einen anderen Ordner hinzu.',
-        '{ok} Plugin(s) nach {out} geschrieben.'),
+        '{ok} Plugin(s) nach {out} geschrieben.', 'Ändern…'),
 }
 
 TEXT = {lang : dict(zip(KEYS, t)) for lang, t in _T.items()}

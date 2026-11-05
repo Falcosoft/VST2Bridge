@@ -28,7 +28,7 @@ make -C bridge macos    # vst2bridge-macos, universal arm64 + x86_64 (clang on a
 
 The helpers are the same on all systems (mingw-w64); the Linux and macOS patchers bundle them with their CLAP. The frozen macOS patcher carries `vst2bridge-macos.gz`: PyInstaller would otherwise thin a bare Mach-O data file to the architecture of the build machine (the `--selftest` checks that both architectures are there). `VB_TEST_SYSTEM=windows|linux|macos` makes the patcher from source act as that system's patcher (CI only).
 
-The patcher runs from source with Python 3.10+ and Tkinter (`python patcher.py`, or `python patcher.py --cli [folder] [--output <folder>] [--format both|vst2|clap]`; it reads `input` next to `patcher.py` and writes `output` there unless `--output` says otherwise); it takes the bridge files from `bridge/`.
+The patcher runs from source with Python 3.10+ and Tkinter (`python patcher.py`, or `python patcher.py --cli [folder] [--output <folder>] [--format both|vst2|clap]`; it reads `input` next to `patcher.py` and writes `output` there unless `--output` says otherwise or the window's **Change…** button chose another folder, which is kept in `settings.json` (`%APPDATA%\VST2Bridge`, `~/Library/Application Support/VST2Bridge` or `~/.config/vst2bridge`) and read again at the next start; `--output` wins over it); it takes the bridge files from `bridge/`.
 
 ## Tests
 
