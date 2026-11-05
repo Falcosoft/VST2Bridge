@@ -28,15 +28,21 @@ gcc $CF -Wno-format-truncation -DVB_FLOATING_GUI -shared -fPIC -fvisibility=hidd
 mkdir -p "$T/a" "$T/b"
 cp "$T/fake32.dll" "$T/a/fake.dll"; cp vst2bridge-x64.dll "$T/a/fake_x64.dll"; cp vst2bridge-x64.clap "$T/a/fake_x64.clap"; cp vst2bridge-host32.exe "$T/a/"
 cp "$T/fake64.dll" "$T/b/fake.dll"; cp vst2bridge-x86.dll "$T/b/fake_x86.dll"; cp vst2bridge-x86.clap "$T/b/fake_x86.clap"; cp vst2bridge-host64.exe "$T/b/"
+# Direct loading keeps the plugin in a separate folder and accepts paths with spaces.
+mkdir -p "$T/direct plugins" "$T/api32" "$T/api64"
+cp "$T/fake32.dll" "$T/direct plugins/target32.dll"
+cp "$T/fake64.dll" "$T/direct plugins/target64.dll"
+cp vst2bridge-x64.dll "$T/api64/bridge.dll"; cp vst2bridge-host32.exe "$T/api64/"
+cp vst2bridge-x86.dll "$T/api32/bridge.dll"; cp vst2bridge-host64.exe "$T/api32/"
 # the CLAP alone (no bridge DLL next to it): plugin + helper + .clap, as when only the .clap is copied
 mkdir -p "$T/ca" "$T/cb"
 cp "$T/fake32.dll" "$T/ca/fake.dll"; cp vst2bridge-x64.clap "$T/ca/fake_x64.clap"; cp vst2bridge-host32.exe "$T/ca/"
 cp "$T/fake64.dll" "$T/cb/fake.dll"; cp vst2bridge-x86.clap "$T/cb/fake_x86.clap"; cp vst2bridge-host64.exe "$T/cb/"
 st=0
 echo "== 32-bit plugin in a 64-bit host (fake_x64.dll)"
-wine "$T/testhost64.exe" "$(winepath -w "$T/a/fake_x64.dll")" || st=1
+wine "$T/testhost64.exe" "$(winepath -w "$T/a/fake_x64.dll")" Fake32 "$(winepath -w "$T/api64/bridge.dll")" "$(winepath -w "$T/direct plugins/target32.dll")" || st=1
 echo "== 64-bit plugin in a 32-bit host (fake_x86.dll)"
-wine "$T/testhost32.exe" "$(winepath -w "$T/b/fake_x86.dll")" || st=1
+wine "$T/testhost32.exe" "$(winepath -w "$T/b/fake_x86.dll")" Fake64 "$(winepath -w "$T/api32/bridge.dll")" "$(winepath -w "$T/direct plugins/target64.dll")" || st=1
 echo "== 32-bit plugin as CLAP in a 64-bit host (fake_x64.clap)"
 wine "$T/testclap64.exe" "$(winepath -w "$T/ca/fake_x64.clap")" || st=1
 echo "== 64-bit plugin as CLAP in a 32-bit host (fake_x86.clap)"

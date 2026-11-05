@@ -6,6 +6,7 @@
 // Windows: the host loads the bridge like any VST2 plugin. The bridge finds the real plugin from its own file name
 // (syxg50_x64.dll -> syxg50.dll in the same folder), starts the helper of the plugin's bitness and passes every
 // call through shared memory (protocol.h); the plugin's calls to the host come back the same way.
+// Hosts with direct bridge support can use VST2BridgeCreateA/W to open a plugin in its original folder.
 // The transport (named events and a mutex on Windows; loopback sockets, a shared file and a lock word elsewhere) is in
 // the two platform blocks below; the calls themselves (exchange, marshalling, audio) are the same on all systems.
 #ifndef _WIN32
@@ -15,6 +16,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#ifdef _WIN32
+#include <wchar.h>
+#include "vst2bridge.h"
+#endif
 #ifndef _WIN32
 #include <errno.h>
 #include <fcntl.h>
@@ -67,7 +72,7 @@ typedef struct {
     uint8_t* chunk; size_t chunk_cap;
     uint8_t* spk[2]; size_t spk_cap[2];
     uint32_t n_ev, sysex_n;             // events of effProcessEvents wait here for the next process call
-    VbEvent ev[VB_MAXEVENTS];
+    VbEvent ev[VB_MAXEVENTS_TO_PLUGIN];
     uint8_t sysex[VB_SYSEX_MAX];
     char error[256];
 } Inst;
@@ -84,10 +89,11 @@ typedef struct {
 
 typedef struct {                        // a mapping for one chunk larger than a frame
     void* view; size_t n;
-    char name[PATH_MAX > 260 ? PATH_MAX : 260];
 #ifdef _WIN32
+    char name[MAX_PATH];
     HANDLE m;
 #else
+    char name[PATH_MAX > 260 ? PATH_MAX : 260];
     int fd;
 #endif
 } Chunk;
@@ -96,6 +102,15 @@ static void serve_master(Inst* p, VbFrame* f, int on_server);
 static int call_main(Inst* p, Req* r);
 static void serve_loop(Inst* p, VbChan* ch, int in, int reply, int on_server);
 static volatile int32_t g_counter;
+
+typedef struct {
+#ifdef _WIN32
+    wchar_t plugin[MAX_PATH], helper[MAX_PATH], working_dir[MAX_PATH];
+#else
+    const char* dir;
+    const char* stem;
+#endif
+} StartPaths;
 
 #ifdef _WIN32
 // ============================================================================= Windows: named objects
@@ -109,18 +124,22 @@ static volatile int32_t g_counter;
 #endif
 #define VB_SIZEWINDOW_MSG (WM_APP + 1)
 
-static wchar_t g_dir[MAX_PATH], g_stem[MAX_PATH], g_self_name[MAX_PATH];
 static HMODULE g_self;
 static const char* const g_sig_names[S_N] = { VB_OBJ_READY, VB_OBJ_MAIN_H, VB_OBJ_MAIN_S, VB_OBJ_MAIN_V, VB_OBJ_AUDIO_H, VB_OBJ_AUDIO_S, VB_OBJ_AUX_H, VB_OBJ_AUX_S };
 
-static void log_error(const char* m)
+static void log_error(const StartPaths* paths, const char* m)
 {
-    wchar_t t[MAX_PATH]; char f[MAX_PATH * 3];
-    DWORD n = GetTempPathW(MAX_PATH, t);
-    if (!n || n >= MAX_PATH) wcscpy(t, L"C:\\Windows\\Temp\\");
-    snprintf(f, sizeof f, "%lsvst2bridge.log", t);
-    FILE* fp = fopen(f, "a");
-    if (fp) { fprintf(fp, "%ls: %s\n", g_self_name, m); fclose(fp); }
+    wchar_t file[MAX_PATH + 32];
+    DWORD n = GetTempPathW(MAX_PATH, file);
+    if (!n || n >= MAX_PATH) return;
+    wcscpy(file + n, L"vst2bridge.log");
+    FILE* fp = _wfopen(file, L"a");
+    if (fp) {
+        char name[MAX_PATH * 3];
+        int converted = WideCharToMultiByte(CP_UTF8, 0, paths->plugin, -1, name, sizeof name, 0, 0);
+        fprintf(fp, "%s: %s\n", converted ? name : "VST2Bridge", m);
+        fclose(fp);
+    }
 }
 
 static int file_exists(const wchar_t* f) { DWORD a = GetFileAttributesW(f); return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY); }
@@ -192,13 +211,11 @@ static intptr_t size_window(Inst* p, AEffect* fx, VbFrame* f, int on_server)
 static DWORD WINAPI server_thread(LPVOID a) { Inst* p = (Inst*)a; serve_loop(p, &p->sh->main, S_MAIN_V, S_MAIN_H, 1); return 0; }
 static DWORD WINAPI aux_thread(LPVOID a) { Inst* p = (Inst*)a; serve_loop(p, &p->sh->aux, S_AUX_S, S_AUX_H, 0); return 0; }
 
-static int plat_start(Inst* p)
+static int plat_start(Inst* p, const StartPaths* paths)
 {
-    wchar_t dll[MAX_PATH], exe[MAX_PATH], cmd[4 * MAX_PATH], wpfx[64];
-    _snwprintf(dll, MAX_PATH, L"%ls\\%ls.dll", g_dir, g_stem);
-    _snwprintf(exe, MAX_PATH, L"%ls\\%ls", g_dir, VB_HELPER);
-    if (!file_exists(dll)) { snprintf(p->error, sizeof p->error, "plugin %ls not found next to the bridge", dll); return 0; }
-    if (!file_exists(exe)) { snprintf(p->error, sizeof p->error, "%ls not found next to the bridge", VB_HELPER); return 0; }
+    wchar_t cmd[4 * MAX_PATH], wpfx[64];
+    if (!file_exists(paths->plugin)) { snprintf(p->error, sizeof p->error, "plugin DLL not found"); return 0; }
+    if (!file_exists(paths->helper)) { snprintf(p->error, sizeof p->error, "%ls not found next to the bridge", VB_HELPER); return 0; }
 
     snprintf(p->prefix, sizeof p->prefix, "Local\\V2B%lu_%ld_", GetCurrentProcessId(), (long)vb_inc(&g_counter));
     MultiByteToWideChar(CP_ACP, 0, p->prefix, -1, wpfx, 64);
@@ -216,7 +233,8 @@ static int plat_start(Inst* p)
 
     // shell plugins ask for the id of the sub-plugin while they are created; the helper answers with this one
     int32_t shell_id = p->master ? (int32_t)p->master(0, audioMasterCurrentId, 0, 0, 0, 0) : 0;
-    _snwprintf(cmd, 4 * MAX_PATH, L"\"%ls\" \"%ls\" %ls %ld %lu", exe, dll, wpfx, (long)shell_id, GetCurrentProcessId());
+    _snwprintf(cmd, 4 * MAX_PATH, L"\"%ls\" \"%ls\" %ls %ld %lu",
+               paths->helper, paths->plugin, wpfx, (long)shell_id, GetCurrentProcessId());
 
     p->job = CreateJobObjectW(0, 0);                                // the helper ends with the host, even if the host crashes
     if (p->job) {
@@ -225,8 +243,8 @@ static int plat_start(Inst* p)
         SetInformationJobObject(p->job, JobObjectExtendedLimitInformation, &li, sizeof li);
     }
     STARTUPINFOW si; PROCESS_INFORMATION pi; memset(&si, 0, sizeof si); si.cb = sizeof si;
-    if (!CreateProcessW(exe, cmd, 0, 0, FALSE, CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB | CREATE_SUSPENDED, 0, g_dir, &si, &pi)
-        && !CreateProcessW(exe, cmd, 0, 0, FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED, 0, g_dir, &si, &pi)) {
+    if (!CreateProcessW(paths->helper, cmd, 0, 0, FALSE, CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB | CREATE_SUSPENDED, 0, paths->working_dir, &si, &pi)
+        && !CreateProcessW(paths->helper, cmd, 0, 0, FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED, 0, paths->working_dir, &si, &pi)) {
         snprintf(p->error, sizeof p->error, "cannot start %ls (error %lu)", VB_HELPER, GetLastError()); return 0;
     }
     if (p->job) AssignProcessToJobObject(p->job, pi.hProcess);
@@ -284,7 +302,6 @@ static void chunk_unmap(Chunk* c) { UnmapViewOfFile(c->view); CloseHandle(c->m);
 #else
 // ============================================================================= Linux / macOS: Wine, sockets, a shared file
 
-static char g_dir[PATH_MAX], g_stem[256];
 static const int g_sig_fd[S_N] = { 0, 0, 0, 1, 2, 2, 3, 3 };       // M M M V A A X X
 #ifdef __APPLE__
 #define SEND_FLAGS 0                                                // SO_NOSIGPIPE is set on the sockets instead
@@ -292,13 +309,13 @@ static const int g_sig_fd[S_N] = { 0, 0, 0, 1, 2, 2, 3, 3 };       // M M M V A 
 #define SEND_FLAGS MSG_NOSIGNAL                                     // a helper that is gone must not kill the host with SIGPIPE
 #endif
 
-static void log_error(const char* m)
+static void log_error(const StartPaths* paths, const char* m)
 {
     const char* t = getenv("TMPDIR");
     char f[PATH_MAX];
     snprintf(f, sizeof f, "%s/vst2bridge.log", t && *t ? t : "/tmp");
     FILE* fp = fopen(f, "a");
-    if (fp) { fprintf(fp, "%s.clap: %s\n", g_stem, m); fclose(fp); }
+    if (fp) { fprintf(fp, "%s.clap: %s\n", paths->stem, m); fclose(fp); }
 }
 
 static int file_exists(const char* f) { struct stat st; return stat(f, &st) == 0 && S_ISREG(st.st_mode); }
@@ -403,17 +420,17 @@ static const char* shm_dir(char* buf, size_t n)
 #endif
 }
 
-static int plat_start(Inst* p)
+static int plat_start(Inst* p, const StartPaths* paths)
 {
     char dll[PATH_MAX], exe[PATH_MAX], t[PATH_MAX + 64], tdir[PATH_MAX];
     for (int i = 0; i < 4; i++) p->fd[i] = -1;
     p->shm_fd = -1;
-    snprintf(t, sizeof t, "%s/%s.dll", g_dir, g_stem);
-    if (!file_exists(t) || !realpath(t, dll)) { snprintf(p->error, sizeof p->error, "plugin %s.dll not found next to the CLAP", g_stem); return 0; }
+    snprintf(t, sizeof t, "%s/%s.dll", paths->dir, paths->stem);
+    if (!file_exists(t) || !realpath(t, dll)) { snprintf(p->error, sizeof p->error, "plugin %s.dll not found next to the CLAP", paths->stem); return 0; }
     int bits = pe_bits(dll);
-    if (!bits) { snprintf(p->error, sizeof p->error, "%s.dll is not a 32-bit or 64-bit Windows plugin", g_stem); return 0; }
+    if (!bits) { snprintf(p->error, sizeof p->error, "%s.dll is not a 32-bit or 64-bit Windows plugin", paths->stem); return 0; }
     const char* helper = bits == 32 ? "vst2bridge-host32.exe" : "vst2bridge-host64.exe";
-    snprintf(t, sizeof t, "%s/%s", g_dir, helper);
+    snprintf(t, sizeof t, "%s/%s", paths->dir, helper);
     if (!file_exists(t) || !realpath(t, exe)) { snprintf(p->error, sizeof p->error, "%s not found next to the CLAP", helper); return 0; }
 
     snprintf(p->shm_path, sizeof p->shm_path, "%.900s/vst2bridge_%d_%d", shm_dir(tdir, sizeof tdir), (int)getpid(), (int)vb_inc(&g_counter));
@@ -454,7 +471,7 @@ static int plat_start(Inst* p)
     for (int i = 0; i < ne; i++) { envp[i] = environ[i]; if (!strncmp(environ[i], "WINEDEBUG=", 10)) has_dbg = 1; }
     if (!has_dbg) envp[ne] = (char*)"WINEDEBUG=-all";
     posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_addchdir_np(&fa, g_dir);              // the plugin finds its files next to itself
+    posix_spawn_file_actions_addchdir_np(&fa, paths->dir);         // the plugin finds its files next to itself
     if (!getenv("VB_DEBUG")) {
         posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
         posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0);
@@ -657,7 +674,7 @@ static void serve_master(Inst* p, VbFrame* f, int on_server)
         case audioMasterProcessEvents: {                            // MIDI sent by the plugin
             uint32_t n = 0;
             if (in_len >= 4) memcpy(&n, f->data, 4);
-            if (n > VB_MAXEVENTS || 4 + (size_t)n * sizeof(VbEvent) > in_len) break;
+            if (n > VB_MAXEVENTS_TO_HOST || 4 + (size_t)n * sizeof(VbEvent) > in_len) break;
             const VbEvent* e = (const VbEvent*)(f->data + 4);
             const uint8_t* sx = f->data + 4 + n * sizeof(VbEvent);
             size_t sx_len = in_len - 4 - n * sizeof(VbEvent);
@@ -716,9 +733,9 @@ static void serve_loop(Inst* p, VbChan* ch, int in, int reply, int on_server)
 
 // ----------------------------------------------------------------------------- start / stop
 
-static int start(Inst* p)
+static int start(Inst* p, const StartPaths* paths)
 {
-    if (!plat_start(p)) return 0;
+    if (!plat_start(p, paths)) return 0;
     if (!p->sh->ok) { snprintf(p->error, sizeof p->error, "%s", p->sh->error[0] ? p->sh->error : "the plugin could not be loaded"); return 0; }
     return 1;
 }
@@ -730,7 +747,7 @@ static void queue_events(Inst* p, const VstEvents* evs)
     vb_lock(&p->ev_cs);
     for (int i = 0; i < evs->numEvents; i++) {
         const VstEvent* e = evs->events[i];
-        if (!e || p->n_ev >= VB_MAXEVENTS) continue;
+        if (!e || p->n_ev >= VB_MAXEVENTS_TO_PLUGIN) continue;
         VbEvent* q = &p->ev[p->n_ev];
         memset(q, 0, sizeof *q);
         q->type = e->type; q->delta = e->deltaFrames < 0 ? 0 : e->deltaFrames; q->flags = e->flags;
@@ -956,8 +973,9 @@ static intptr_t VSTCALL vst_dispatch(AEffect* fx, int32_t op, int32_t index, int
 
 // ----------------------------------------------------------------------------- entry
 
-static AEffect* create(AudioMasterCallback master)
+static AEffect* create(AudioMasterCallback master, const StartPaths* paths)
 {
+    if (!master) return 0;
     Inst* p = (Inst*)calloc(1, sizeof *p);
     if (!p) return 0;
     vb_mutex_init(&p->audio_cs); vb_mutex_init(&p->ev_cs);
@@ -967,8 +985,8 @@ static AEffect* create(AudioMasterCallback master)
     fx->setParameter = vst_set_parameter; fx->getParameter = vst_get_parameter;
     fx->processReplacing = vst_process_replacing; fx->processDoubleReplacing = vst_process_double;
     fx->object = p;
-    if (!start(p)) {
-        log_error(p->error);
+    if (!start(p, paths)) {
+        log_error(paths, p->error);
         plat_stop(p);
         inst_free(p);
         return 0;
@@ -979,46 +997,84 @@ static AEffect* create(AudioMasterCallback master)
 }
 
 #ifdef _WIN32
-static void set_names(void)
+static AEffect* create_windows(AudioMasterCallback master, const wchar_t* plugin_path, const wchar_t* helper_dir)
 {
-    wchar_t full[MAX_PATH];
-    if (!GetModuleFileNameW(g_self, full, MAX_PATH)) wcscpy(full, L".\\x.dll");
-    for (wchar_t* q = full; *q; q++) if (*q == L'/') *q = L'\\';
-    wchar_t* slash = wcsrchr(full, L'\\');
-    wchar_t* base = slash ? slash + 1 : full;
-    wcsncpy(g_self_name, base, MAX_PATH - 1);
-    if (slash) { *slash = 0; wcsncpy(g_dir, full, MAX_PATH - 1); } else wcscpy(g_dir, L".");
-    wcsncpy(g_stem, base, MAX_PATH - 1);
-    wchar_t* dot = wcsrchr(g_stem, L'.'); if (dot) *dot = 0;
-    size_t n = wcslen(g_stem);                                      // syxg50_x64 -> syxg50
-    if (n > 4 && !_wcsicmp(g_stem + n - 4, VB_SUFFIX)) g_stem[n - 4] = 0;
+    StartPaths paths;
+    wchar_t* leaf = 0;
+    DWORD n = GetFullPathNameW(plugin_path, MAX_PATH, paths.plugin, &leaf);
+    if (!n || n >= MAX_PATH || !leaf || !*leaf) return 0;
+    size_t dir_len = (size_t)(leaf - paths.plugin);
+    wmemcpy(paths.working_dir, paths.plugin, dir_len);
+    paths.working_dir[dir_len] = 0;
+
+    int len = _snwprintf(paths.helper, MAX_PATH, L"%ls\\%ls", helper_dir, VB_HELPER);
+    if (len < 0 || len >= MAX_PATH) return 0;
+    return create(master, &paths);
+}
+
+static AEffect* create_from_module(AudioMasterCallback master, const wchar_t* plugin_path)
+{
+    wchar_t module[MAX_PATH], sibling[MAX_PATH];
+    DWORD n = GetModuleFileNameW(g_self, module, MAX_PATH);
+    if (!n || n >= MAX_PATH) return 0;
+    for (wchar_t* q = module; *q; q++) if (*q == L'/') *q = L'\\';
+    wchar_t* slash = wcsrchr(module, L'\\');
+    if (!slash) return 0;
+
+    if (!plugin_path) {
+        wcscpy(sibling, module);
+        wchar_t* base = sibling + (slash - module) + 1;
+        wchar_t* dot = wcsrchr(base, L'.');
+        if (dot) *dot = 0;
+        size_t len = wcslen(base);
+        if (len > 4 && !_wcsicmp(base + len - 4, VB_SUFFIX)) len -= 4;
+        wchar_t* ext = base + len;
+        if ((size_t)(ext - sibling) + sizeof L".dll" / sizeof(wchar_t) > MAX_PATH) return 0;
+        wcscpy(ext, L".dll");
+        plugin_path = sibling;
+    }
+    *slash = 0;
+    return create_windows(master, plugin_path, module);
 }
 
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r) { (void)r; if (reason == DLL_PROCESS_ATTACH) g_self = (HMODULE)h; return TRUE; }
 
 AEffect* VSTPluginMain(AudioMasterCallback master)
 {
-    if (!g_stem[0]) set_names();
-    return create(master);
+    return create_from_module(master, 0);
 }
 
 AEffect* vb_main(AudioMasterCallback master) { return VSTPluginMain(master); }     // exported as "main" (old hosts)
+
+AEffect* VSTCALL VST2BridgeCreateW(AudioMasterCallback master, const wchar_t* plugin_path)
+{
+    return plugin_path && *plugin_path ? create_from_module(master, plugin_path) : 0;
+}
+
+AEffect* VSTCALL VST2BridgeCreateA(AudioMasterCallback master, const char* plugin_path)
+{
+    wchar_t wide[MAX_PATH];
+    if (!plugin_path || !MultiByteToWideChar(CP_ACP, 0, plugin_path, -1, wide, MAX_PATH)) return 0;
+    return VST2BridgeCreateW(master, wide);
+}
 
 // the CLAP (clap.c) has this file linked in and creates the plugin through it: dir = the CLAP's folder, stem = <plugin>
 // of <plugin>.dll there (<plugin>_x64.clap -> <plugin>.dll); the CLAP needs no bridge DLL next to it
 AEffect* vb_stub_main(AudioMasterCallback master, const wchar_t* dir, const wchar_t* stem, const wchar_t* self_name)
 {
-    wcsncpy(g_dir, dir, MAX_PATH - 1); wcsncpy(g_stem, stem, MAX_PATH - 1); wcsncpy(g_self_name, self_name, MAX_PATH - 1);
-    return create(master);
+    (void)self_name;
+    wchar_t plugin[MAX_PATH];
+    int len = _snwprintf(plugin, MAX_PATH, L"%ls\\%ls.dll", dir, stem);
+    if (len < 0 || len >= MAX_PATH) return 0;
+    return create_windows(master, plugin, dir);
 }
 int VST2BridgeStub(void) { return VB_VERSION; }                                     // marker for the patcher
 #else
 // the CLAP (clap.c) creates the plugin through these; dir = the CLAP's folder, stem = <plugin> of <plugin>.dll there
 AEffect* vb_stub_main(AudioMasterCallback master, const char* dir, const char* stem)
 {
-    snprintf(g_dir, sizeof g_dir, "%s", dir);
-    snprintf(g_stem, sizeof g_stem, "%s", stem);
-    return create(master);
+    const StartPaths paths = { dir, stem };
+    return create(master, &paths);
 }
 
 // the editor is a window of the helper: VB_F_TOPLEVEL (Linux: the CLAP moves it into the host's window, title

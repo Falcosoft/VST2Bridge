@@ -27,7 +27,8 @@
 #define VB_FRAME_DATA   65536           // bytes passed by pointer per call (larger chunks use a mapping of their own)
 #define VB_MAXCH        32              // audio channels each way
 #define VB_MAXFRAMES    4096            // longest piece of a process call (longer calls are split)
-#define VB_MAXEVENTS    1024            // MIDI events per piece
+#define VB_MAXEVENTS_TO_PLUGIN 1024     // events queued for the next process call and sent in VbAudio
+#define VB_MAXEVENTS_TO_HOST   1024     // events returned by audioMasterProcessEvents in VbFrame.data
 #define VB_SYSEX_MAX    65536           // SysEx bytes per piece
 
 enum { VB_MSG_NONE = 0, VB_MSG_REQ, VB_MSG_REPLY };
@@ -84,7 +85,7 @@ typedef struct {                        // the plugin's AEffect fields, refreshe
 typedef struct {
     int32_t  nin, nout;
     uint32_t n_events, sysex_bytes;
-    VbEvent  events[VB_MAXEVENTS];
+    VbEvent  events[VB_MAXEVENTS_TO_PLUGIN];
     uint8_t  sysex[VB_SYSEX_MAX];
     double   in[VB_MAXCH][VB_MAXFRAMES];      // float pieces use the first half of each row as float[]
     double   out[VB_MAXCH][VB_MAXFRAMES];
@@ -102,6 +103,7 @@ typedef struct {
 
 _Static_assert(sizeof(VbFrame) == 48 + VB_FRAME_DATA, "VbFrame layout");
 _Static_assert(sizeof(VbEvent) == 36, "VbEvent layout");
+_Static_assert(4 + VB_MAXEVENTS_TO_HOST * sizeof(VbEvent) <= VB_FRAME_DATA, "MIDI output fits in a frame");
 _Static_assert(sizeof(VbInfo) == 48, "VbInfo layout");
 
 // object names: "Local\V2B<host pid>_<n>_<suffix>"

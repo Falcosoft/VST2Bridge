@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <wchar.h>
 #include <math.h>
 #include "vst2.h"
 #include "protocol.h"
@@ -211,7 +212,7 @@ static intptr_t VSTCALL master(AEffect* e, int32_t op, int32_t idx, intptr_t val
             if (!evs || evs->numEvents <= 0) return 0;
             uint8_t* buf = (uint8_t*)malloc(VB_FRAME_DATA);
             if (!buf) return 0;
-            uint32_t n = 0, cnt = evs->numEvents > VB_MAXEVENTS ? VB_MAXEVENTS : (uint32_t)evs->numEvents;
+            uint32_t n = 0, cnt = evs->numEvents > VB_MAXEVENTS_TO_HOST ? VB_MAXEVENTS_TO_HOST : (uint32_t)evs->numEvents;
             VbEvent* out = (VbEvent*)(buf + 4);
             size_t sx_room = VB_FRAME_DATA - 4 - cnt * sizeof(VbEvent), sx_used = 0;
             uint8_t* sx = buf + 4 + cnt * sizeof(VbEvent);
@@ -325,9 +326,9 @@ static void edit_close(void)
 
 static void do_process(VbFrame* f)
 {
-    static VstMidiEvent mev[VB_MAXEVENTS];
-    static VstMidiSysexEvent sev[VB_MAXEVENTS];
-    static char evbuf[sizeof(VstEvents) + VB_MAXEVENTS * sizeof(VstEvent*)];
+    static VstMidiEvent mev[VB_MAXEVENTS_TO_PLUGIN];
+    static VstMidiSysexEvent sev[VB_MAXEVENTS_TO_PLUGIN];
+    static char evbuf[sizeof(VstEvents) + VB_MAXEVENTS_TO_PLUGIN * sizeof(VstEvent*)];
     static double zero[VB_MAXFRAMES], sink[VB_MAXFRAMES];
     static void* ins[256]; static void* outs[256];
     VbAudio* a = &sh->au;
@@ -336,7 +337,7 @@ static void do_process(VbFrame* f)
     if (n < 0) n = 0;
     if (n > VB_MAXFRAMES) n = VB_MAXFRAMES;
 
-    uint32_t ne = a->n_events > VB_MAXEVENTS ? VB_MAXEVENTS : a->n_events, cnt = 0;
+    uint32_t ne = a->n_events > VB_MAXEVENTS_TO_PLUGIN ? VB_MAXEVENTS_TO_PLUGIN : a->n_events, cnt = 0;
     VstEvents* list = (VstEvents*)evbuf;
     for (uint32_t i = 0; i < ne; i++) {
         const VbEvent* e = &a->events[i];

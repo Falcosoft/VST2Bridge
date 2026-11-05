@@ -13,7 +13,7 @@
 CC64 ?= x86_64-w64-mingw32-gcc
 CC32 ?= i686-w64-mingw32-gcc
 CFLAGS = -O2 -Wall -Wextra -I.
-HDRS = vst2.h protocol.h marshal.h plat.h
+HDRS = vst2.h vst2bridge.h protocol.h marshal.h plat.h
 OUT = vst2bridge-x64.dll vst2bridge-x86.dll vst2bridge-x64.clap vst2bridge-x86.clap vst2bridge-host32.exe vst2bridge-host64.exe
 
 all: $(OUT)
