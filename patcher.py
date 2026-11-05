@@ -8,8 +8,9 @@
 # bridge files of its system (bridge/: mingw-w64 for the Windows files and helpers, gcc / clang for the Linux / macOS
 # CLAP) and docs/versions.md.
 # * Plugins are searched in the subfolder "input" of the patcher's folder (subfolders of it included) and in the folders
-#   the user adds; each plugin has a checkbox (all selected at the start). The plugin's copy, the bridges and the helper
-#   exe are written into the subfolder "output" of the patcher's folder (utility/bridges.py). Windows only: the output
+#   the user adds; each plugin has a checkbox (all selected at the start). The patcher moves each plugin into the
+#   subfolder "output" of the patcher's folder (input stays empty) and writes the bridges and the helper exe there
+#   (utility/bridges.py); plugins already in "output" are listed as well. Windows only: the output
 #   format (VST2 + CLAP, VST2 only, CLAP only).
 # * patcher --cli [folder] [--dry-run] [--output <folder>] [--format both|vst2|clap]   the same without a window
 #   (input + folder if given; --format counts for the Windows patcher only)
@@ -29,6 +30,8 @@ CODE = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
 INPUT, OUTPUT = HERE / 'input', HERE / 'output'
 BIN = CODE / 'bin' if FROZEN else CODE / 'bridge'          # the bridge binaries (dev: built by `make -C bridge`)
 CHANGELOG = CODE / 'docs' / 'versions.md'
+ICONS = [CODE / ('icons' if FROZEN else 'utility/icons') / n for n in ('patcher.png', 'patcher_32.png', 'patcher_16.png')]
+                                                # window icons in three sizes (the exe / app icon is set by the build)
 sys.path.insert(0, str(CODE / 'utility'))
 sys.path.insert(0, str(CODE))
 try : from patcher_version import VERSION
@@ -126,6 +129,7 @@ def selftest(out : str | None) -> int :
         else : kind_ok = macho_archs(data) == {0x0100000C, 0x01000007}                                          # arm64 + x86_64
         if not (kind_ok and bridges.MARKER in data and b'clap_entry' in data) : problems.append(name)
     if not CHANGELOG.is_file() : problems.append('docs/versions.md')
+    if not all(f.is_file() for f in ICONS) : problems.append('icons')
     text = f'VST2Bridge-Patcher {VERSION}'
     if out : Path(out).write_text(text + '\n')
     print(text, 'OK' if not problems else 'PROBLEMS: ' + ', '.join(problems))
@@ -142,6 +146,8 @@ def main_window(opts : dict) :
     root = tk.Tk()
     root.title(f'VST2Bridge Patcher {VERSION}')
     root.minsize(640, 360)
+    try : root.iconphoto(True, *[tk.PhotoImage(file = str(f)) for f in ICONS])
+    except Exception : pass                                     # a missing icon must never stop the patcher
     try : INPUT.mkdir(exist_ok = True)
     except OSError : pass
     st = dict(lang = system_language(LANGUAGES), folders = [Path(opts['folder'])] if opts.get('folder') else [], out = Path(opts.get('output') or OUTPUT),

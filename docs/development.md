@@ -9,7 +9,8 @@
 | `bridge/` | The bridge in C: `stub.c` (bridge DLL; on Linux / macOS linked into the CLAP), `clap.c` (CLAP bridge around it), `host.c` (helper exe), `protocol.h` (shared memory), `plat.h` (Windows / POSIX primitives), `marshal.h` (how each opcode's data is copied), `vst2.h` (VST 2.4 declarations written from the public interface description, no Steinberg SDK file), `stub.def` (exports), `clap/` (CLAP headers, MIT, from the CLAP SDK), `Makefile` |
 | `bridge/test/` | `fakevst.c` (test plugin), `testhost.c` (VST2 test host), `testclap.c` (CLAP test host, Windows and Linux), `smoke.c` (loads a Linux / macOS CLAP without Wine), `run_tests.sh` (all bridges under Wine) |
 | `patcher.py`, `patcher_i18n.py` | The patcher (Tkinter window and `--cli`); texts in 29 languages (the same as SXG-Create-NF; a missing key falls back to English) |
-| `utility/bridges.py` | Finding plugins (`input` + added folders) and writing the plugin copy, bridges and helper into `output` |
+| `utility/icons/` | The patcher's icon: `patcher.ico` (Windows exe), `patcher.icns` (macOS app), `patcher.png` / `patcher_32.png` / `patcher_16.png` (window icon in Tk); taken from SXG-Create-NF, artwork derived from "Vst icon" by SyafriStudio (Magnific) |
+| `utility/bridges.py` | Finding plugins (`input` + added folders) and moving the plugin into `output` and writing the bridges and helper there |
 | `utility/pe.py` | Reading machine type and exports of a DLL |
 | `utility/selfupdate.py` | Self-update from the GitHub releases (adapted from SXG-Create-NF) |
 | `docs/versions.md` | Version history, shown by the patcher's **What's new?** |

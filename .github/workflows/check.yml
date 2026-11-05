@@ -57,11 +57,14 @@ jobs:
           test -f "$O/plug32.dll" && test -f "$O/plug32_x64.dll" && test -f "$O/plug32_x64.clap" && test -f "$O/vst2bridge-host32.exe"
           test -f "$O/plug64.dll" && test -f "$O/plug64_x86.dll" && test -f "$O/plug64_x86.clap" && test -f "$O/vst2bridge-host64.exe"
           test ! -e "$T/Win/plug32_x64.dll"
+          test ! -e "$T/Win/plug32.dll" && test ! -e "$T/Win/sub/plug64.dll"      # the plugins were moved to the output folder
           VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win" --output "$O" | grep -c current | grep -qx 2
           echo "== Windows output formats"
-          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win" --output "$T/V" --format vst2
+          cp -r "$T/Input" "$T/Win2"
+          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win2" --output "$T/V" --format vst2
           test -f "$T/V/plug32_x64.dll" && test ! -e "$T/V/plug32_x64.clap"
-          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win" --output "$T/C" --format clap
+          cp -r "$T/Input" "$T/Win3"
+          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win3" --output "$T/C" --format clap
           test -f "$T/C/plug32_x64.clap" && test ! -e "$T/C/plug32_x64.dll"
           echo "== as the Linux patcher (CLAP only)"
           python3 patcher.py --cli "$T/Input" --output "$T/LinOut"
@@ -118,6 +121,7 @@ jobs:
           gzip -9 -c bridge/vst2bridge-macos > bin/vst2bridge-macos.gz   # gzipped: PyInstaller would thin a bare Mach-O file
           python -m pip install --quiet pyinstaller
           python -m PyInstaller --onefile --windowed --noconfirm --clean --name VST2Bridge-Patcher \
+            --icon utility/icons/patcher.icns --add-data "utility/icons:icons" \
             --paths utility --paths . --add-data "bin:bin" --add-data "docs/versions.md:docs" \
             --hidden-import patcher_i18n --hidden-import bridges --hidden-import pe --hidden-import selfupdate patcher.py
           P=dist/VST2Bridge-Patcher.app/Contents/MacOS/VST2Bridge-Patcher
@@ -125,6 +129,7 @@ jobs:
           mkdir -p t && cp dl/fake/plug32.dll t/
           "$P" --cli "$PWD/t" --output "$PWD/o"
           find o
+          test -f o/plug32.dll && test ! -e t/plug32.dll        # moved into the output folder
           codesign --verify --verbose o/plug32.clap
           ./smoke o/plug32.clap/Contents/MacOS/plug32 "$PWD/o/plug32.clap"
           ./smoke o/plug32.clap/Contents/MacOS/plug32
