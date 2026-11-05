@@ -376,7 +376,7 @@ static int chan_wait(Inst* p, int s, int pump)
     char b;
     for (;;) {
         ssize_t n = recv(p->fd[g_sig_fd[s]], &b, 1, 0);
-        if (n == 1) return !p->dead;
+        if (n == 1) return !vb_load(&p->dead);
         if (n < 0 && errno == EINTR) continue;
         vb_xchg(&p->dead, 1);
         return 0;
