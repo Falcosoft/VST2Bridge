@@ -192,12 +192,37 @@ static intptr_t size_window(Inst* p, AEffect* fx, VbFrame* f, int on_server)
 static DWORD WINAPI server_thread(LPVOID a) { Inst* p = (Inst*)a; serve_loop(p, &p->sh->main, S_MAIN_V, S_MAIN_H, 1); return 0; }
 static DWORD WINAPI aux_thread(LPVOID a) { Inst* p = (Inst*)a; serve_loop(p, &p->sh->aux, S_AUX_S, S_AUX_H, 0); return 0; }
 
+// Where the real plugin is: the patcher writes <plugin>.vst2bridge next to the bridge, a text file with the path of the
+// original plugin (UTF-8, one line); without that file (or if the plugin is gone from there) <plugin>.dll next to the
+// bridge is used. pdir = the plugin's folder (the helper starts there, so the plugin finds its files).
+static int find_plugin(wchar_t* dll, wchar_t* pdir)
+{
+    wchar_t side[MAX_PATH];
+    _snwprintf(side, MAX_PATH, L"%ls\\%ls.vst2bridge", g_dir, g_stem);
+    HANDLE h = CreateFileW(side, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_EXISTING, 0, 0);
+    if (h != INVALID_HANDLE_VALUE) {
+        char b[4 * MAX_PATH]; DWORD n = 0;
+        if (!ReadFile(h, b, sizeof b - 1, &n, 0)) n = 0;
+        CloseHandle(h);
+        b[n] = 0;
+        char* a = b; if ((unsigned char)a[0] == 0xEF && (unsigned char)a[1] == 0xBB && (unsigned char)a[2] == 0xBF) a += 3;
+        for (char* e = a; *e; e++) if (*e == '\r' || *e == '\n') { *e = 0; break; }
+        if (*a && MultiByteToWideChar(CP_UTF8, 0, a, -1, dll, MAX_PATH) && file_exists(dll)) goto found;
+    }
+    _snwprintf(dll, MAX_PATH, L"%ls\\%ls.dll", g_dir, g_stem);
+    if (!file_exists(dll)) return 0;
+found:
+    wcsncpy(pdir, dll, MAX_PATH - 1); pdir[MAX_PATH - 1] = 0;
+    for (wchar_t* q = pdir; *q; q++) if (*q == L'/') *q = L'\\';
+    wchar_t* sl = wcsrchr(pdir, L'\\'); if (sl) *sl = 0; else wcscpy(pdir, L".");
+    return 1;
+}
+
 static int plat_start(Inst* p)
 {
-    wchar_t dll[MAX_PATH], exe[MAX_PATH], cmd[4 * MAX_PATH], wpfx[64];
-    _snwprintf(dll, MAX_PATH, L"%ls\\%ls.dll", g_dir, g_stem);
+    wchar_t dll[MAX_PATH], pdir[MAX_PATH], exe[MAX_PATH], cmd[4 * MAX_PATH], wpfx[64];
     _snwprintf(exe, MAX_PATH, L"%ls\\%ls", g_dir, VB_HELPER);
-    if (!file_exists(dll)) { snprintf(p->error, sizeof p->error, "plugin %ls not found next to the bridge", dll); return 0; }
+    if (!find_plugin(dll, pdir)) { snprintf(p->error, sizeof p->error, "plugin %ls.dll not found (%ls.vst2bridge or next to the bridge)", g_stem, g_stem); return 0; }
     if (!file_exists(exe)) { snprintf(p->error, sizeof p->error, "%ls not found next to the bridge", VB_HELPER); return 0; }
 
     snprintf(p->prefix, sizeof p->prefix, "Local\\V2B%lu_%ld_", GetCurrentProcessId(), (long)vb_inc(&g_counter));
@@ -225,8 +250,8 @@ static int plat_start(Inst* p)
         SetInformationJobObject(p->job, JobObjectExtendedLimitInformation, &li, sizeof li);
     }
     STARTUPINFOW si; PROCESS_INFORMATION pi; memset(&si, 0, sizeof si); si.cb = sizeof si;
-    if (!CreateProcessW(exe, cmd, 0, 0, FALSE, CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB | CREATE_SUSPENDED, 0, g_dir, &si, &pi)
-        && !CreateProcessW(exe, cmd, 0, 0, FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED, 0, g_dir, &si, &pi)) {
+    if (!CreateProcessW(exe, cmd, 0, 0, FALSE, CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB | CREATE_SUSPENDED, 0, pdir, &si, &pi)
+        && !CreateProcessW(exe, cmd, 0, 0, FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED, 0, pdir, &si, &pi)) {
         snprintf(p->error, sizeof p->error, "cannot start %ls (error %lu)", VB_HELPER, GetLastError()); return 0;
     }
     if (p->job) AssignProcessToJobObject(p->job, pi.hProcess);
@@ -408,8 +433,22 @@ static int plat_start(Inst* p)
     char dll[PATH_MAX], exe[PATH_MAX], t[PATH_MAX + 64], tdir[PATH_MAX];
     for (int i = 0; i < 4; i++) p->fd[i] = -1;
     p->shm_fd = -1;
-    snprintf(t, sizeof t, "%s/%s.dll", g_dir, g_stem);
-    if (!file_exists(t) || !realpath(t, dll)) { snprintf(p->error, sizeof p->error, "plugin %s.dll not found next to the CLAP", g_stem); return 0; }
+    dll[0] = 0;
+    snprintf(t, sizeof t, "%s/%s.vst2bridge", g_dir, g_stem);       // the patcher writes the original plugin's path there (UTF-8, one line)
+    FILE* sf = fopen(t, "rb");
+    if (sf) {
+        char b[PATH_MAX + 8]; size_t n = fread(b, 1, PATH_MAX, sf); fclose(sf);
+        b[n] = 0;
+        char* a = b; if ((unsigned char)a[0] == 0xEF && (unsigned char)a[1] == 0xBB && (unsigned char)a[2] == 0xBF) a += 3;
+        a[strcspn(a, "\r\n")] = 0;
+        if (!*a || !file_exists(a) || !realpath(a, dll)) dll[0] = 0;
+    }
+    if (!dll[0]) {                                                  // no such file or the plugin is gone: <plugin>.dll next to the CLAP
+        snprintf(t, sizeof t, "%s/%s.dll", g_dir, g_stem);
+        if (!file_exists(t) || !realpath(t, dll)) { snprintf(p->error, sizeof p->error, "plugin %s.dll not found (%s.vst2bridge or next to the CLAP)", g_stem, g_stem); return 0; }
+    }
+    char pdir[PATH_MAX]; snprintf(pdir, sizeof pdir, "%s", dll);
+    { char* sl = strrchr(pdir, '/'); if (sl && sl != pdir) *sl = 0; else if (sl) pdir[1] = 0; }
     int bits = pe_bits(dll);
     if (!bits) { snprintf(p->error, sizeof p->error, "%s.dll is not a 32-bit or 64-bit Windows plugin", g_stem); return 0; }
     const char* helper = bits == 32 ? "vst2bridge-host32.exe" : "vst2bridge-host64.exe";
@@ -454,7 +493,7 @@ static int plat_start(Inst* p)
     for (int i = 0; i < ne; i++) { envp[i] = environ[i]; if (!strncmp(environ[i], "WINEDEBUG=", 10)) has_dbg = 1; }
     if (!has_dbg) envp[ne] = (char*)"WINEDEBUG=-all";
     posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_addchdir_np(&fa, g_dir);              // the plugin finds its files next to itself
+    posix_spawn_file_actions_addchdir_np(&fa, pdir);               // the plugin finds its files next to itself
     if (!getenv("VB_DEBUG")) {
         posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
         posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0);

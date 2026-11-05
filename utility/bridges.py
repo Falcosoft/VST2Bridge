@@ -1,6 +1,7 @@
-# Finds VST2 plugins and writes the bridges into the output folder (the work behind patcher.py). Everything for one plugin
-# goes into the same folder: a copy of the plugin DLL (the bridge looks for <name>.dll next to itself), the bridge files and
-# the helper exe.
+# Finds VST2 plugins and writes the bridges into the output folder (the work behind patcher.py). The output folder holds
+# only new files: the bridge files, the helper exe and <name>.vst2bridge, a text file with the path of the original plugin
+# (the bridge reads it to find the plugin; the original stays where it is, with its own data files). The bridge also uses
+# a <name>.dll next to itself if there is no such file or the plugin is gone from that path.
 # Windows patcher (FORMATS: 'both' = VST2 + CLAP, 'vst2', 'clap'):
 #   32-bit plugin  name.dll  ->  name_x64.dll (vst2bridge-x64.dll) + name_x64.clap (vst2bridge-x64.clap)
 #                                + vst2bridge-host32.exe                                     for 64-bit hosts
@@ -30,14 +31,14 @@ FORMATS = ('both', 'vst2', 'clap')           # Windows patcher: which bridges to
 class Plugin :
     path : Path             # the plugin as found
     bits : int
-    out : Path              # output folder: the plugin is copied there and the bridges are written next to the copy
+    out : Path              # output folder: the bridges, the helper and <name>.vst2bridge are written there
     fmt : str = 'both'      # Windows: 'both', 'vst2' or 'clap'; Linux / macOS always write the CLAP
     state : str = ''        # 'new', 'current' (bridges are the same as the bundled ones), 'old' (older or missing bridge files), 'blocked' (a file of another kind has a bridge name), 'dup' (another plugin of the same name came first)
     error : str = ''
     selected : bool = True  # the window's checkbox
 
     @property
-    def copy(self) -> Path : return self.out / (self.path.stem + '.dll')
+    def link(self) -> Path : return self.out / (self.path.stem + '.vst2bridge')    # names the original plugin
     @property
     def bridge(self) -> Path | None :
         wanted = SYSTEM == 'windows' and self.fmt in ('both', 'vst2')
@@ -86,8 +87,8 @@ def scan(folders : list[Path], bin_dir : Path, out_dir : Path, fmt : str = 'both
             except (pe.PEError, OSError) as e : log(f'{p}: {e}'); continue
             if info.is_bridge or info.is_jbridge or not info.is_vst2 or info.bits is None : continue
             pl = Plugin(p, info.bits, out_dir, fmt)
-            if pl.copy.name.lower() in names : pl.state = 'dup'
-            else : names.add(pl.copy.name.lower()); state(pl, bin_dir)
+            if pl.link.name.lower() in names : pl.state = 'dup'
+            else : names.add(pl.link.name.lower()); state(pl, bin_dir)
             found.append(pl)
     found.sort(key = lambda q : str(q.path).lower())
     return found
@@ -97,6 +98,10 @@ def _ours(path : Path, test) -> bool :
     except (pe.PEError, OSError) : return False
 
 def _same(path : Path, ref : Path) -> bool : return path.is_file() and filecmp.cmp(path, ref, shallow = False)
+
+def _link_ok(pl : Plugin) -> bool :
+    try : return pl.link.read_text('utf-8').strip() == str(pl.path.resolve())
+    except (OSError, ValueError) : return False
 
 def _bundle_exe(bundle : Path) -> Path : return bundle / 'Contents' / 'MacOS' / bundle.stem
 
@@ -114,7 +119,7 @@ def _posix_current(clap : Path, bin_dir : Path) -> bool :
     return info.get(PLIST_KEY) == hashlib.sha256(data).hexdigest() and _bundle_exe(clap).is_file()
 
 def state(pl : Plugin, bin_dir : Path) -> Plugin :
-    own = _same(pl.copy, pl.path)
+    own = _link_ok(pl)
     if SYSTEM != 'windows' :
         c = pl.clap
         if c.exists() and not _posix_ours(c) : pl.state = 'blocked'
@@ -149,12 +154,12 @@ def make_bundle(binary : bytes, bundle : Path) -> None :
     if r.returncode != 0 : raise OSError(f'codesign failed for {bundle.name}: {r.stderr.strip()}')
 
 def create(pl : Plugin, bin_dir : Path) -> bool :
-    """Write the plugin copy, the bridges and their helper into the output folder. Never replaces a bridge file that is not one of ours."""
+    """Write the link to the plugin, the bridges and their helper into the output folder (the plugin itself is not copied). Never replaces a bridge file that is not one of ours."""
     if pl.state in ('blocked', 'dup') :
         pl.error = 'blocked'; return False
     try :
         pl.out.mkdir(parents = True, exist_ok = True)
-        if not _same(pl.copy, pl.path) : shutil.copyfile(pl.path, pl.copy)
+        if not _link_ok(pl) : pl.link.write_text(str(pl.path.resolve()) + '\n', 'utf-8')
         if SYSTEM == 'windows' :
             stub, helper, _, clap = BRIDGE[pl.bits]
             if pl.bridge : shutil.copyfile(bin_dir / stub, pl.bridge)

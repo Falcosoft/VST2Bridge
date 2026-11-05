@@ -15,11 +15,11 @@
 | `<name>.clap` (Linux) | `bridge/clap.c` + `bridge/stub.c` (x86-64, `vst2bridge-linux.clap`) | CLAP plugin; runs `<name>.dll` (32 or 64-bit) in the helper of its bitness under Wine |
 | `<name>.clap/` (macOS bundle) | `bridge/clap.c` + `bridge/stub.c` (universal, `vst2bridge-macos`) | The same for macOS: `<name>.clap/Contents/MacOS/<name>`, `Info.plist`, signed ad hoc |
 
-All bridge DLLs of one bitness are the same file; the bridge takes the plugin from its own name: it removes `.dll` and the suffix `_x64` (64-bit bridge) or `_x86` (32-bit bridge) and loads `<name>.dll` from its own folder. The helper must be in the same folder. The bridge exports `VSTPluginMain`, `main` (old hosts) and the marker `VST2BridgeStub`, by which the patcher recognises its own files (it also skips JBridge's files, which export `JBridgeBootstrap`).
+All bridge DLLs of one bitness are the same file; the bridge takes the plugin from its own name: it removes `.dll` and the suffix `_x64` (64-bit bridge) or `_x86` (32-bit bridge) and finds the plugin through `<name>.vst2bridge` in its own folder, a text file with the plugin's path (UTF-8, one line; the patcher writes it, the original is not copied). Without that file, or if the plugin is gone from that path, it loads `<name>.dll` from its own folder. The helper must be in the same folder as the bridge and is started in the plugin's folder, so the plugin finds its data files. The bridge exports `VSTPluginMain`, `main` (old hosts) and the marker `VST2BridgeStub`, by which the patcher recognises its own files (it also skips JBridge's files, which export `JBridgeBootstrap`).
 
 ## CLAP bridge
 
-The CLAP bridge (`bridge/clap.c`) is a VST2 host in a CLAP plugin: it creates the plugin through the VST2 bridge (`stub.c`, linked into the CLAP, so no separate bridge DLL is needed) and translates every CLAP call into VST2 calls. The plugin is the file with the CLAP's own name without the suffix (`foo_x64.clap` → `foo.dll` in the same folder). The process boundary, the helper and the passing of data are those of the VST2 bridge, unchanged. All CLAP bridges of one bitness are the same file; it exports `clap_entry` and the marker `VST2BridgeClap`.
+The CLAP bridge (`bridge/clap.c`) is a VST2 host in a CLAP plugin: it creates the plugin through the VST2 bridge (`stub.c`, linked into the CLAP, so no separate bridge DLL is needed) and translates every CLAP call into VST2 calls. The plugin is the file with the CLAP's own name without the suffix (`foo_x64.clap` → the path in `foo.vst2bridge`, else `foo.dll` in the same folder). The process boundary, the helper and the passing of data are those of the VST2 bridge, unchanged. All CLAP bridges of one bitness are the same file; it exports `clap_entry` and the marker `VST2BridgeClap`.
 
 | CLAP | VST2 |
 |---|---|
@@ -36,7 +36,7 @@ The CLAP bridge (`bridge/clap.c`) is a VST2 host in a CLAP plugin: it creates th
 
 ## Linux and macOS
 
-The Linux / macOS CLAP is `clap.c` and `stub.c` linked into one native file (`make -C bridge linux` / `macos`), so the CLAP side and the whole protocol are the code of the Windows bridges; `bridge/plat.h` covers the differences (locks, thread ids, atomics). Instead of loading a VST2 DLL, `clap.c` calls the bridge directly (`vb_stub_main`). The file takes the plugin from its own name: `foo.clap` → `foo.dll` in the same folder (no suffix is removed; on macOS the host may pass the bundle or the binary inside it). The bitness of the DLL (PE header) decides the helper.
+The Linux / macOS CLAP is `clap.c` and `stub.c` linked into one native file (`make -C bridge linux` / `macos`), so the CLAP side and the whole protocol are the code of the Windows bridges; `bridge/plat.h` covers the differences (locks, thread ids, atomics). Instead of loading a VST2 DLL, `clap.c` calls the bridge directly (`vb_stub_main`). The file takes the plugin from its own name: `foo.clap` → the path in `foo.vst2bridge`, else `foo.dll` in the same folder (no suffix is removed; on macOS the host may pass the bundle or the binary inside it). The bitness of the DLL (PE header) decides the helper.
 
 The helper is the same Windows program, started under Wine:
 

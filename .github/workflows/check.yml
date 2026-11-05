@@ -54,8 +54,8 @@ jobs:
           echo "== as the Windows patcher"
           VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win" --output "$T/WinOut"
           O="$T/WinOut"
-          test -f "$O/plug32.dll" && test -f "$O/plug32_x64.dll" && test -f "$O/plug32_x64.clap" && test -f "$O/vst2bridge-host32.exe"
-          test -f "$O/plug64.dll" && test -f "$O/plug64_x86.dll" && test -f "$O/plug64_x86.clap" && test -f "$O/vst2bridge-host64.exe"
+          test -f "$O/plug32.vst2bridge" && test ! -e "$O/plug32.dll" && test -f "$O/plug32_x64.dll" && test -f "$O/plug32_x64.clap" && test -f "$O/vst2bridge-host32.exe"
+          test -f "$O/plug64.vst2bridge" && test ! -e "$O/plug64.dll" && test -f "$O/plug64_x86.dll" && test -f "$O/plug64_x86.clap" && test -f "$O/vst2bridge-host64.exe"
           test ! -e "$T/Win/plug32_x64.dll"
           VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win" --output "$O" | grep -c current | grep -qx 2
           echo "== Windows output formats"
@@ -65,7 +65,7 @@ jobs:
           test -f "$T/C/plug32_x64.clap" && test ! -e "$T/C/plug32_x64.dll"
           echo "== as the Linux patcher (CLAP only)"
           python3 patcher.py --cli "$T/Input" --output "$T/LinOut"
-          test -f "$T/LinOut/plug32.dll" && test -f "$T/LinOut/plug32.clap" && test -f "$T/LinOut/vst2bridge-host32.exe" && test ! -e "$T/LinOut/plug32_x64.dll"
+          test -f "$T/LinOut/plug32.vst2bridge" && test ! -e "$T/LinOut/plug32.dll" && test -f "$T/LinOut/plug32.clap" && test -f "$T/LinOut/vst2bridge-host32.exe" && test ! -e "$T/LinOut/plug32_x64.dll"
           test -f "$T/LinOut/plug64.clap" && test -f "$T/LinOut/vst2bridge-host64.exe"
           python3 patcher.py --cli "$T/Input" --output "$T/LinOut" | grep -c current | grep -qx 2
 
@@ -126,6 +126,7 @@ jobs:
           mkdir -p t && cp dl/fake/plug32.dll t/
           "$P" --cli "$PWD/t" --output "$PWD/o"
           find o
+          test -f o/plug32.vst2bridge && test ! -e o/plug32.dll
           codesign --verify --verbose o/plug32.clap
           ./smoke o/plug32.clap/Contents/MacOS/plug32 "$PWD/o/plug32.clap"
           ./smoke o/plug32.clap/Contents/MacOS/plug32

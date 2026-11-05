@@ -4,6 +4,7 @@ What changed in each Autobuild release, newest first. Releases are numbered `r<N
 
 | Release | Date | Changes |
 |---|---|---|
+| next | | The patcher no longer copies the original plugins into `output`: they stay in `input` (or the folder you added) and `output` holds only new files (bridge files, helper exe and a small `<name>.vst2bridge` file with the path of the original). The bridge runs the plugin from its original folder, so data files next to it are found too. A `<name>.dll` next to the bridge still works. Bridges written by r8 or earlier show as "update". |
 | next | | Patcher: new program icon (the one of the SXG-Create-NF patcher) for the Windows exe, the macOS app and the window on all systems. |
 | r8 | 2026-11-05 | Patcher: plugins are searched only in the subfolder `input` next to the patcher (plus folders added with **Add folder…**); bridges are always written to the subfolder `output` (with a copy of the plugin and the helper); every plugin has a checkbox (all ticked at the start) to choose what is converted; Windows patcher: **Output format** (VST2 + CLAP, VST2 only, CLAP only) ([#9](https://github.com/NightFright2k19/VST2Bridge/issues/9)). `--cli` gets `--output` and `--format`. |
 | r7 | 2026-11-05 | Sample rates: the bridge no longer converts sample rates or reads `vst2bridge.ini`; the plugin always gets the rate the host sets (VST2 and CLAP bridge, removes the r4 conversion) ([#10](https://github.com/NightFright2k19/VST2Bridge/issues/10)). |
