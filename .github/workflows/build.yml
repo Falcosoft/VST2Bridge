@@ -60,7 +60,7 @@ jobs:
         run: wineserver -k || true          # leftover Wine processes make the job hang in its cleanup
 
       - name: Upload bridge
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bridge-bin
           path: bin/*
@@ -109,7 +109,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Download bridge
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bridge-bin
           path: bin
@@ -135,7 +135,7 @@ jobs:
           ls -la bin
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -186,7 +186,7 @@ jobs:
           ls -la upload
 
       - name: Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: patcher-${{ matrix.asset }}
           path: upload/*
@@ -198,7 +198,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download patchers
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: patcher-*
           path: assets
@@ -235,6 +235,8 @@ jobs:
             - **Linux and macOS:** the patcher writes only CLAP bridges: `syxg50.dll` → `syxg50.clap` (macOS: a `.clap` bundle, signed ad hoc) + the helper of the plugin's bitness (`vst2bridge-host32.exe` or `vst2bridge-host64.exe`). The CLAP runs the Windows plugin in that helper under **Wine**, which must be installed (`wine` in the path, a usual install folder on macOS, or `VB_WINE`). The plugin's window is embedded on Linux (X11) and opens as a floating window on macOS (Wine on Apple Silicon needs Rosetta 2). Linux and macOS are not tested in real hosts yet: feedback welcome.
 
             **WHAT'S NEW**
+            - Linux / macOS: one thread wake-up less per audio block.
+            - Windows: less CPU and latency per audio block, especially with many instances (the audio thread polls briefly for the helper's answer; `VST2BRIDGE_SPIN=0` turns it off).
             - Windows VST2 hosts can [open plugins by path](https://github.com/NightFright2k19/VST2Bridge/blob/main/docs/technical.md#direct-loading-on-windows) with `VST2BridgeCreateA/W`.
             - See the [version history](https://github.com/NightFright2k19/VST2Bridge/blob/main/docs/versions.md); the patcher shows it with **What's new?**.
 

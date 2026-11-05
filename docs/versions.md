@@ -5,6 +5,8 @@ What changed in each Autobuild release, newest first. Releases are numbered `r<N
 | Release | Date | Changes |
 |---|---|---|
 | next | | Internal: the tests also run the Linux CLAP with AddressSanitizer + UndefinedBehaviorSanitizer; the Linux / macOS bridge reads its "helper gone" flag atomically (no behaviour change). |
+| r15 | 2026-11-05 | Linux / macOS: the helper's audio thread reads the bridge's signals from its socket directly, one thread wake-up less per audio block. |
+| r15 | 2026-11-05 | Windows bridge: the audio thread now polls briefly for the helper's answer before it sleeps and the helper's audio thread uses MMCSS, so a `process` call returns sooner and uses less CPU with many instances (about a third faster in our Wine benchmark). `VST2BRIDGE_SPIN=0` turns the polling off. |
 | r14 | 2026-11-05 | Windows VST2 hosts can open plugins by path with `VST2BridgeCreateA/W`, so they can reuse a single bridge DLL without generating one per plugin. |
 | r13 | 2026-11-05 | Patcher: the search path now sits on the same line as the *Search in:* label instead of a few pixels lower. |
 | r12 | 2026-11-05 | Patcher: the original plugins are never moved any more; the bridge files and the helper exe are written next to each plugin, in the folder it was found in. The patcher's own folder is both source and destination, so the `input` / `output` folders, the **Output folder** row with **Change…**, `--output` and the *name taken* status are gone ([#17](https://github.com/NightFright2k19/VST2Bridge/issues/17)). |
