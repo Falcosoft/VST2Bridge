@@ -85,7 +85,7 @@ jobs:
         run: wineserver -k || true          # leftover Wine processes make the job hang in its cleanup
 
       - name: Upload helpers and test plugin (macOS job)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: check-bin
           path: |
@@ -104,7 +104,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Download helpers and test plugin
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: check-bin
           path: dl
@@ -117,7 +117,7 @@ jobs:
           clang -O2 -Wall -Ibridge -o smoke bridge/test/smoke.c
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
