@@ -4,6 +4,7 @@ What changed in each Autobuild release, newest first. Releases are numbered `r<N
 
 | Release | Date | Changes |
 |---|---|---|
+| next | | Patcher: plugins are searched only in the subfolder `input` next to the patcher (plus folders added with **Add folder…**); bridges are always written to the subfolder `output` (with a copy of the plugin and the helper); every plugin has a checkbox (all ticked at the start) to choose what is converted; Windows patcher: **Output format** (VST2 + CLAP, VST2 only, CLAP only) ([#9](https://github.com/NightFright2k19/VST2Bridge/issues/9)). `--cli` gets `--output` and `--format`. |
 | r7 | 2026-11-05 | Sample rates: the bridge no longer converts sample rates or reads `vst2bridge.ini`; the plugin always gets the rate the host sets (VST2 and CLAP bridge, removes the r4 conversion) ([#10](https://github.com/NightFright2k19/VST2Bridge/issues/10)). |
 | r6 | 2026-11-04 | Windows CLAP bridge: the VST2 bridge is built into the `.clap`, so it works on its own with the plugin and the helper exe (it no longer needs `<name>_x64.dll` next to it). The plugin is found by the `.clap` file name without `_x64` / `_x86`; a missing plugin is written to `%TEMP%\vst2bridge.log`. |
 | r5 | 2026-11-04 | Linux and macOS (Apple Silicon and Intel): patchers for both systems that write CLAP bridges only (`<name>.clap` + the helper of the plugin's bitness); the CLAP runs the Windows plugin (32-bit or 64-bit) under Wine. The plugin's window is embedded on Linux (X11) and floating on macOS. The patcher updates itself on all three systems. |

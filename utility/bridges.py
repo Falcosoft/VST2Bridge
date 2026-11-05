@@ -1,5 +1,7 @@
-# Finds VST2 plugins in a folder and writes the bridges next to them (the work behind patcher.py).
-# Windows patcher:
+# Finds VST2 plugins and writes the bridges into the output folder (the work behind patcher.py). Everything for one plugin
+# goes into the same folder: a copy of the plugin DLL (the bridge looks for <name>.dll next to itself), the bridge files and
+# the helper exe.
+# Windows patcher (FORMATS: 'both' = VST2 + CLAP, 'vst2', 'clap'):
 #   32-bit plugin  name.dll  ->  name_x64.dll (vst2bridge-x64.dll) + name_x64.clap (vst2bridge-x64.clap)
 #                                + vst2bridge-host32.exe                                     for 64-bit hosts
 #   64-bit plugin  name.dll  ->  name_x86.dll (vst2bridge-x86.dll) + name_x86.clap (vst2bridge-x86.clap)
@@ -22,29 +24,36 @@ POSIX_CLAP = {'linux' : 'vst2bridge-linux.clap', 'macos' : 'vst2bridge-macos'}
 MARKER = b'VST2BridgeClap'                  # exported by every CLAP bridge (Windows: found by pe.py, else in the bytes)
 PLIST_KEY = 'VST2BridgeSource'              # macOS bundle: SHA-256 of the binary it was made from (signing changes the file)
 SKIP_DIRS = {'.git', '__pycache__'}
+FORMATS = ('both', 'vst2', 'clap')           # Windows patcher: which bridges to write (VST2 + CLAP is the default)
 
 @dataclass
 class Plugin :
-    path : Path
+    path : Path             # the plugin as found
     bits : int
-    state : str = ''        # 'new', 'current' (bridges are the same as the bundled ones), 'old' (older or missing bridge files), 'blocked' (a file of another kind has a bridge name)
+    out : Path              # output folder: the plugin is copied there and the bridges are written next to the copy
+    fmt : str = 'both'      # Windows: 'both', 'vst2' or 'clap'; Linux / macOS always write the CLAP
+    state : str = ''        # 'new', 'current' (bridges are the same as the bundled ones), 'old' (older or missing bridge files), 'blocked' (a file of another kind has a bridge name), 'dup' (another plugin of the same name came first)
     error : str = ''
+    selected : bool = True  # the window's checkbox
 
     @property
+    def copy(self) -> Path : return self.out / (self.path.stem + '.dll')
+    @property
     def bridge(self) -> Path | None :
-        return self.path.with_name(self.path.stem + BRIDGE[self.bits][2] + '.dll') if SYSTEM == 'windows' else None
+        wanted = SYSTEM == 'windows' and self.fmt in ('both', 'vst2')
+        return self.out / (self.path.stem + BRIDGE[self.bits][2] + '.dll') if wanted else None
     @property
-    def clap(self) -> Path :
-        if SYSTEM == 'windows' : return self.path.with_name(self.path.stem + BRIDGE[self.bits][2] + '.clap')
-        return self.path.with_name(self.path.stem + '.clap')
+    def clap(self) -> Path | None :
+        if SYSTEM != 'windows' : return self.out / (self.path.stem + '.clap')
+        return self.out / (self.path.stem + BRIDGE[self.bits][2] + '.clap') if self.fmt in ('both', 'clap') else None
     @property
-    def helper(self) -> Path : return self.path.with_name(HELPER[self.bits])
+    def helper(self) -> Path : return self.out / HELPER[self.bits]
     @property
     def target_bits(self) -> int : return 96 - self.bits if SYSTEM == 'windows' else 64    # Linux / macOS hosts are 64-bit
     @property
     def label(self) -> str :
         """What the patcher writes for this plugin, as shown in the list."""
-        return f'{self.bridge.name} + .clap' if self.bridge else self.clap.name
+        return ' + '.join(f.name for f in (self.bridge, self.clap) if f)
 
 def needed(bin_dir : Path) -> list[str] :
     if SYSTEM == 'windows' : return [n for b in BRIDGE.values() for n in (b[0], b[1], b[3])]
@@ -60,14 +69,27 @@ def clap_bytes(bin_dir : Path) -> bytes :
     f = bin_dir / POSIX_CLAP[SYSTEM]
     return f.read_bytes() if f.is_file() else gzip.decompress((bin_dir / (f.name + '.gz')).read_bytes())
 
-def scan(folder : Path, bin_dir : Path, log = lambda m : None) -> list[Plugin] :
-    found = []
-    for p in sorted(folder.rglob('*.dll'), key = lambda q : str(q).lower()) :
-        if any(part in SKIP_DIRS for part in p.relative_to(folder).parts) or not p.is_file() : continue
-        try : info = pe.read(p)
-        except (pe.PEError, OSError) as e : log(f'{p}: {e}'); continue
-        if info.is_bridge or info.is_jbridge or not info.is_vst2 or info.bits is None : continue
-        found.append(state(Plugin(p, info.bits), bin_dir))
+def scan(folders : list[Path], bin_dir : Path, out_dir : Path, fmt : str = 'both', log = lambda m : None) -> list[Plugin] :
+    """VST2 plugins in the folders (subfolders included); files inside out_dir are left out."""
+    found, seen, names = [], set(), set()
+    try : out_real = out_dir.resolve()
+    except OSError : out_real = out_dir
+    for folder in folders :
+        if not folder.is_dir() : continue
+        for p in sorted(folder.rglob('*.dll'), key = lambda q : str(q).lower()) :
+            if any(part in SKIP_DIRS for part in p.relative_to(folder).parts) or not p.is_file() : continue
+            try : real = p.resolve()
+            except OSError : real = p
+            if real in seen or out_real in real.parents : continue
+            seen.add(real)
+            try : info = pe.read(p)
+            except (pe.PEError, OSError) as e : log(f'{p}: {e}'); continue
+            if info.is_bridge or info.is_jbridge or not info.is_vst2 or info.bits is None : continue
+            pl = Plugin(p, info.bits, out_dir, fmt)
+            if pl.copy.name.lower() in names : pl.state = 'dup'
+            else : names.add(pl.copy.name.lower()); state(pl, bin_dir)
+            found.append(pl)
+    found.sort(key = lambda q : str(q.path).lower())
     return found
 
 def _ours(path : Path, test) -> bool :
@@ -92,19 +114,20 @@ def _posix_current(clap : Path, bin_dir : Path) -> bool :
     return info.get(PLIST_KEY) == hashlib.sha256(data).hexdigest() and _bundle_exe(clap).is_file()
 
 def state(pl : Plugin, bin_dir : Path) -> Plugin :
+    own = _same(pl.copy, pl.path)
     if SYSTEM != 'windows' :
         c = pl.clap
         if c.exists() and not _posix_ours(c) : pl.state = 'blocked'
         elif not c.exists() : pl.state = 'new'
-        elif _posix_current(c, bin_dir) and _same(pl.helper, bin_dir / HELPER[pl.bits]) : pl.state = 'current'
+        elif _posix_current(c, bin_dir) and _same(pl.helper, bin_dir / HELPER[pl.bits]) and own : pl.state = 'current'
         else : pl.state = 'old'
         return pl
     stub, helper, _, clap = BRIDGE[pl.bits]
     b, c = pl.bridge, pl.clap
-    if (b.exists() and not _ours(b, lambda i : i.is_bridge)) or (c.exists() and not _ours(c, lambda i : i.is_clap_bridge)) :
-        pl.state = 'blocked'
-    elif not b.exists() and not c.exists() : pl.state = 'new'
-    elif _same(b, bin_dir / stub) and _same(c, bin_dir / clap) and _same(pl.helper, bin_dir / helper) : pl.state = 'current'
+    files = [(b, stub, lambda i : i.is_bridge)] * (b is not None) + [(c, clap, lambda i : i.is_clap_bridge)] * (c is not None)
+    if any(f.exists() and not _ours(f, test) for f, _, test in files) : pl.state = 'blocked'
+    elif not any(f.exists() for f, _, _ in files) : pl.state = 'new'
+    elif all(_same(f, bin_dir / n) for f, n, _ in files) and _same(pl.helper, bin_dir / helper) and own : pl.state = 'current'
     else : pl.state = 'old'
     return pl
 
@@ -126,14 +149,16 @@ def make_bundle(binary : bytes, bundle : Path) -> None :
     if r.returncode != 0 : raise OSError(f'codesign failed for {bundle.name}: {r.stderr.strip()}')
 
 def create(pl : Plugin, bin_dir : Path) -> bool :
-    """Write the bridges and their helper next to the plugin. Never replaces a file that is not one of ours."""
-    if pl.state == 'blocked' :
+    """Write the plugin copy, the bridges and their helper into the output folder. Never replaces a bridge file that is not one of ours."""
+    if pl.state in ('blocked', 'dup') :
         pl.error = 'blocked'; return False
     try :
+        pl.out.mkdir(parents = True, exist_ok = True)
+        if not _same(pl.copy, pl.path) : shutil.copyfile(pl.path, pl.copy)
         if SYSTEM == 'windows' :
             stub, helper, _, clap = BRIDGE[pl.bits]
-            shutil.copyfile(bin_dir / stub, pl.bridge)
-            shutil.copyfile(bin_dir / clap, pl.clap)
+            if pl.bridge : shutil.copyfile(bin_dir / stub, pl.bridge)
+            if pl.clap : shutil.copyfile(bin_dir / clap, pl.clap)
         else :
             helper = HELPER[pl.bits]
             if SYSTEM == 'macos' : make_bundle(clap_bytes(bin_dir), pl.clap)

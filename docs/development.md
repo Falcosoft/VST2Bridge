@@ -9,7 +9,7 @@
 | `bridge/` | The bridge in C: `stub.c` (bridge DLL; on Linux / macOS linked into the CLAP), `clap.c` (CLAP bridge around it), `host.c` (helper exe), `protocol.h` (shared memory), `plat.h` (Windows / POSIX primitives), `marshal.h` (how each opcode's data is copied), `vst2.h` (VST 2.4 declarations written from the public interface description, no Steinberg SDK file), `stub.def` (exports), `clap/` (CLAP headers, MIT, from the CLAP SDK), `Makefile` |
 | `bridge/test/` | `fakevst.c` (test plugin), `testhost.c` (VST2 test host), `testclap.c` (CLAP test host, Windows and Linux), `smoke.c` (loads a Linux / macOS CLAP without Wine), `run_tests.sh` (all bridges under Wine) |
 | `patcher.py`, `patcher_i18n.py` | The patcher (Tkinter window and `--cli`); texts in 29 languages (the same as SXG-Create-NF; a missing key falls back to English) |
-| `utility/bridges.py` | Finding plugins and writing bridges |
+| `utility/bridges.py` | Finding plugins (`input` + added folders) and writing the plugin copy, bridges and helper into `output` |
 | `utility/pe.py` | Reading machine type and exports of a DLL |
 | `utility/selfupdate.py` | Self-update from the GitHub releases (adapted from SXG-Create-NF) |
 | `docs/versions.md` | Version history, shown by the patcher's **What's new?** |
@@ -27,7 +27,7 @@ make -C bridge macos    # vst2bridge-macos, universal arm64 + x86_64 (clang on a
 
 The helpers are the same on all systems (mingw-w64); the Linux and macOS patchers bundle them with their CLAP. The frozen macOS patcher carries `vst2bridge-macos.gz`: PyInstaller would otherwise thin a bare Mach-O data file to the architecture of the build machine (the `--selftest` checks that both architectures are there). `VB_TEST_SYSTEM=windows|linux|macos` makes the patcher from source act as that system's patcher (CI only).
 
-The patcher runs from source with Python 3.10+ and Tkinter (`python patcher.py`, or `python patcher.py --cli <folder>`); it takes the bridge files from `bridge/`.
+The patcher runs from source with Python 3.10+ and Tkinter (`python patcher.py`, or `python patcher.py --cli [folder] [--output <folder>] [--format both|vst2|clap]`; it reads `input` next to `patcher.py` and writes `output` there unless `--output` says otherwise); it takes the bridge files from `bridge/`.
 
 ## Tests
 
