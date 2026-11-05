@@ -7,13 +7,13 @@
 # Releases freeze this file with PyInstaller for each system (.github/workflows/build.yml); each patcher carries the
 # bridge files of its system (bridge/: mingw-w64 for the Windows files and helpers, gcc / clang for the Linux / macOS
 # CLAP) and docs/versions.md.
-# * Plugins are searched in the subfolder "input" of the patcher's folder (subfolders of it included) and in the folders
-#   the user adds; each plugin has a checkbox (all selected at the start). The patcher moves each plugin into the
+# * Plugins are searched in the subfolder "input" of the patcher's folder (subfolders of it included), directly in the
+#   patcher's folder itself (top level only) and in the folders the user adds; each plugin has a checkbox (all selected at the start). The patcher moves each plugin into the
 #   subfolder "output" of the patcher's folder (input stays empty) and writes the bridges and the helper exe there
 #   (utility/bridges.py); plugins already in "output" are listed as well. Windows only: the output
 #   format (VST2 + CLAP, VST2 only, CLAP only).
 # * patcher --cli [folder] [--dry-run] [--output <folder>] [--format both|vst2|clap]   the same without a window
-#   (input + folder if given; --format counts for the Windows patcher only)
+#   (input + the patcher's folder + folder if given; --format counts for the Windows patcher only)
 # * The output folder can be changed in the window (button next to "Output folder:"); the choice is remembered in
 #   settings.json of the user's settings folder (%APPDATA%\\VST2Bridge, ~/.config/vst2bridge); --output wins over it.
 # * patcher --selftest [--selftest-out <file>]   checks that the bundled files are there (used by the build and the update)
@@ -112,8 +112,8 @@ def run_cli(args : list[str]) -> int :
     folders = [INPUT] + [Path(r).resolve() for r in rest]
     missing = bridges.binaries_ok(BIN)
     if missing : print('missing bridge files in', BIN, ':', ', '.join(missing)); return 2
-    plugins = bridges.scan(folders, BIN, out, fmt, log = lambda m : print('  skipped:', m))
-    if not plugins : print('No VST2 plugins found in', ', '.join(str(f) for f in folders)); return 0
+    plugins = bridges.scan(folders, BIN, out, fmt, flat = [HERE], log = lambda m : print('  skipped:', m))
+    if not plugins : print('No VST2 plugins found in', ', '.join(str(f) for f in folders + [HERE])); return 0
     fails = 0
     if bridges.SYSTEM != 'windows' and not bridges.wine_found() : print('note: Wine was not found; the CLAP bridges need it')
     for pl in plugins :
@@ -226,7 +226,7 @@ def main_window(opts : dict) :
 
     def todo_list() : return [p for p in st['plugins'] if p.selected and p.state in ('new', 'old')]
     def row_text(pl) :
-        try : name = str(pl.path.relative_to(next(f for f in [INPUT] + st['folders'] if f in pl.path.parents)))
+        try : name = str(pl.path.relative_to(next(f for f in [INPUT, HERE] + st['folders'] if f in pl.path.parents)))
         except (ValueError, StopIteration) : name = str(pl.path)
         return ('\u2611 ' if pl.selected else '\u2610 ') + name
     def fmt_names() : return [T('fmt_both'), T('fmt_vst2'), T('fmt_clap')]
@@ -234,7 +234,7 @@ def main_window(opts : dict) :
     def refresh() :
         root.title(f'VST2Bridge Patcher {VERSION}')
         intro.configure(text = T('intro') if bridges.SYSTEM == 'windows' else T('intro_posix')); folder_lbl.configure(text = T('folders'))
-        folder_val.configure(text = '\n'.join(str(f) for f in [INPUT] + st['folders'])); out_lbl.configure(text = T('output')); out_val.configure(text = str(st['out']))
+        folder_val.configure(text = '\n'.join(str(f) for f in [INPUT, HERE] + st['folders'])); out_lbl.configure(text = T('output')); out_val.configure(text = str(st['out']))
         fmt_lbl.configure(text = T('out_format')); fmt_combo.configure(values = fmt_names(), state = 'disabled' if st['busy'] else 'readonly')
         fmt_var.set(fmt_names()[bridges.FORMATS.index(st['fmt'])])
         browse.configure(text = T('add_folder')); out_btn.configure(text = T('out_change')); rescan.configure(text = T('rescan')); create_btn.configure(text = T('create'))
@@ -285,7 +285,7 @@ def main_window(opts : dict) :
         if missing : st['status'] = ('missing_bin', dict(names = ', '.join(missing))); st['busy'] = True; refresh(); return
         st.update(busy = True, plugins = [], status = ('scanning', {})); progress.configure(mode = 'indeterminate'); progress.start(12); refresh()
         folders, out, fmt = [INPUT] + st['folders'], st['out'], st['fmt']
-        threading.Thread(target = lambda : q.put(('scanned', bridges.scan(folders, BIN, out, fmt))), daemon = True).start()
+        threading.Thread(target = lambda : q.put(('scanned', bridges.scan(folders, BIN, out, fmt, flat = [HERE]))), daemon = True).start()
 
     def choose() :
         d = filedialog.askdirectory(initialdir = str((st['folders'] or [HERE])[-1]), parent = root)
