@@ -4,7 +4,7 @@ What changed in each Autobuild release, newest first. Releases are numbered `r<N
 
 | Release | Date | Changes |
 |---|---|---|
-| next | | Patcher: the original plugins are never moved any more; the bridge files and the helper exe are written next to each plugin, in the folder it was found in. The patcher's own folder is both source and destination, so the `input` / `output` folders, the **Output folder** row with **Change…**, `--output` and the *name taken* status are gone ([#17](https://github.com/NightFright2k19/VST2Bridge/issues/17)). |
+| r12 | 2026-11-05 | Patcher: the original plugins are never moved any more; the bridge files and the helper exe are written next to each plugin, in the folder it was found in. The patcher's own folder is both source and destination, so the `input` / `output` folders, the **Output folder** row with **Change…**, `--output` and the *name taken* status are gone ([#17](https://github.com/NightFright2k19/VST2Bridge/issues/17)). |
 | r11 | 2026-11-05 | License: the project is now licensed under the LGPL v3 (was named GPL-3.0 in the README and the release notes); README and development notes have a license section. |
 | r10 | 2026-11-05 | Patcher: plugin DLLs lying directly in the patcher's own folder are found as well (not only in `input` or an added folder); the bridges, helper files and the `output` folder are not mistaken for plugins. |
 | r10 | 2026-11-05 | Patcher: the output folder can be chosen in the window (**Change…** next to *Output folder*); the choice is remembered for the next start. `--output` on the command line still wins. |
