@@ -164,7 +164,7 @@ def main_window(opts : dict) :
     fbox = ttk.Frame(frame); fbox.grid(row = 2, column = 0, sticky = 'ew')
     fbox.columnconfigure(1, weight = 1)
     folder_lbl = ttk.Label(fbox); folder_lbl.grid(row = 0, column = 0, sticky = 'nw')
-    folder_val = ttk.Label(fbox, foreground = '#444', wraplength = 400, justify = 'left'); folder_val.grid(row = 0, column = 1, sticky = 'w', padx = 6)
+    folder_val = ttk.Label(fbox, foreground = '#444', wraplength = 400, justify = 'left'); folder_val.grid(row = 0, column = 1, sticky = 'nw', padx = 6, pady = (1, 0))  # top-aligned like the label, 1 px lower
     browse = ttk.Button(fbox); browse.grid(row = 0, column = 2, padx = (0, 4), sticky = 'n')
     rescan = ttk.Button(fbox); rescan.grid(row = 0, column = 3, sticky = 'n')
     hint = ttk.Label(fbox, foreground = '#444', wraplength = 600, justify = 'left'); hint.grid(row = 1, column = 0, columnspan = 4, sticky = 'w', pady = (6, 0))
