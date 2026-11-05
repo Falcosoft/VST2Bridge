@@ -7,9 +7,12 @@
 # Releases freeze this file with PyInstaller for each system (.github/workflows/build.yml); each patcher carries the
 # bridge files of its system (bridge/: mingw-w64 for the Windows files and helpers, gcc / clang for the Linux / macOS
 # CLAP) and docs/versions.md.
-# * Plugins are searched in the patcher's folder (subfolders included) or in a folder the user chooses. The bridges and
-#   their helper exe are written into the folder of each plugin (utility/bridges.py).
-# * patcher --cli [folder] [--dry-run]   the same without a window
+# * Plugins are searched in the subfolder "input" of the patcher's folder (subfolders of it included) and in the folders
+#   the user adds; each plugin has a checkbox (all selected at the start). The plugin's copy, the bridges and the helper
+#   exe are written into the subfolder "output" of the patcher's folder (utility/bridges.py). Windows only: the output
+#   format (VST2 + CLAP, VST2 only, CLAP only).
+# * patcher --cli [folder] [--dry-run] [--output <folder>] [--format both|vst2|clap]   the same without a window
+#   (input + folder if given; --format counts for the Windows patcher only)
 # * patcher --selftest [--selftest-out <file>]   checks that the bundled files are there (used by the build and the update)
 # * Update: a release patcher looks for a newer release a moment after it has started and offers it with the Update
 #   button (utility/selfupdate.py); --no-update-check (or VB_NO_UPDATE_CHECK=1) leaves out the check at the start.
@@ -23,6 +26,7 @@ HERE = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resol
 if FROZEN and sys.platform == 'darwin' and HERE.parent.name == 'Contents' :
     HERE = HERE.parents[2]                      # VST2Bridge-Patcher.app/Contents/MacOS -> folder holding the .app
 CODE = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
+INPUT, OUTPUT = HERE / 'input', HERE / 'output'
 BIN = CODE / 'bin' if FROZEN else CODE / 'bridge'          # the bridge binaries (dev: built by `make -C bridge`)
 CHANGELOG = CODE / 'docs' / 'versions.md'
 sys.path.insert(0, str(CODE / 'utility'))
@@ -71,17 +75,24 @@ def attach_console() :
 def run_cli(args : list[str]) -> int :
     attach_console()
     dry = '--dry-run' in args
-    rest = [a for a in args if not a.startswith('--')]
-    folder = Path(rest[0]).resolve() if rest else HERE
+    out, fmt, rest = OUTPUT, 'both', []
+    it = iter(args)
+    for a in it :
+        if a == '--output' : out = Path(next(it, '')).resolve()
+        elif a == '--format' : fmt = next(it, '')
+        elif not a.startswith('--') : rest.append(a)
+    if fmt not in bridges.FORMATS : print('--format must be one of:', ', '.join(bridges.FORMATS)); return 2
+    if bridges.SYSTEM != 'windows' : fmt = 'both'
+    folders = [INPUT] + [Path(r).resolve() for r in rest]
     missing = bridges.binaries_ok(BIN)
     if missing : print('missing bridge files in', BIN, ':', ', '.join(missing)); return 2
-    plugins = bridges.scan(folder, BIN, log = lambda m : print('  skipped:', m))
-    if not plugins : print('No VST2 plugins found in', folder); return 0
+    plugins = bridges.scan(folders, BIN, out, fmt, log = lambda m : print('  skipped:', m))
+    if not plugins : print('No VST2 plugins found in', ', '.join(str(f) for f in folders)); return 0
     fails = 0
     if bridges.SYSTEM != 'windows' and not bridges.wine_found() : print('note: Wine was not found; the CLAP bridges need it')
     for pl in plugins :
-        line = f'{pl.path.relative_to(folder)} ({pl.bits}-bit) -> {pl.bridge.name + " + " if pl.bridge else ""}{pl.clap.name} [{pl.state}]'
-        if not dry and pl.state != 'current' :
+        line = f'{pl.path} ({pl.bits}-bit) -> {out / pl.label} [{pl.state}]'
+        if not dry and pl.state in ('new', 'old') :
             ok = bridges.create(pl, BIN)
             fails += not ok
             line += ' written' if ok else f' FAILED: {pl.error}'
@@ -131,14 +142,17 @@ def main_window(opts : dict) :
     root = tk.Tk()
     root.title(f'VST2Bridge Patcher {VERSION}')
     root.minsize(640, 360)
-    st = dict(lang = system_language(LANGUAGES), folder = Path(opts.get('folder') or HERE), plugins = [], busy = False,
+    try : INPUT.mkdir(exist_ok = True)
+    except OSError : pass
+    st = dict(lang = system_language(LANGUAGES), folders = [Path(opts['folder'])] if opts.get('folder') else [], out = Path(opts.get('output') or OUTPUT),
+              fmt = 'both', unsel = set(), plugins = [], busy = False,
               status = ('scanning', {}), upd = dict(state = 'off'))
     q = queue.Queue()
     def T(key, **kw) : return TEXT[st['lang']].get(key, TEXT['en'][key]).format(**kw)
 
     frame = ttk.Frame(root, padding = 12); frame.grid(sticky = 'nsew')
     root.columnconfigure(0, weight = 1); root.rowconfigure(0, weight = 1)
-    frame.columnconfigure(0, weight = 1); frame.rowconfigure(3, weight = 1)
+    frame.columnconfigure(0, weight = 1); frame.rowconfigure(4, weight = 1)
     head = ttk.Frame(frame); head.grid(row = 0, column = 0, sticky = 'ew')
     ttk.Label(head, text = 'VST2Bridge Patcher', font = ('TkDefaultFont', 13, 'bold')).pack(side = 'left')
     lang_var = tk.StringVar(value = LANGUAGES[st['lang']])
@@ -148,19 +162,27 @@ def main_window(opts : dict) :
     intro = ttk.Label(frame, wraplength = 640, justify = 'left'); intro.grid(row = 1, column = 0, sticky = 'w', pady = (2, 8))
     fbox = ttk.Frame(frame); fbox.grid(row = 2, column = 0, sticky = 'ew')
     fbox.columnconfigure(1, weight = 1)
-    folder_lbl = ttk.Label(fbox); folder_lbl.grid(row = 0, column = 0, sticky = 'w')
-    folder_val = ttk.Label(fbox, foreground = '#444'); folder_val.grid(row = 0, column = 1, sticky = 'w', padx = 6)
-    browse = ttk.Button(fbox); browse.grid(row = 0, column = 2, padx = (0, 4))
-    rescan = ttk.Button(fbox); rescan.grid(row = 0, column = 3)
+    folder_lbl = ttk.Label(fbox); folder_lbl.grid(row = 0, column = 0, sticky = 'nw')
+    folder_val = ttk.Label(fbox, foreground = '#444', wraplength = 400, justify = 'left'); folder_val.grid(row = 0, column = 1, sticky = 'w', padx = 6)
+    browse = ttk.Button(fbox); browse.grid(row = 0, column = 2, padx = (0, 4), sticky = 'n')
+    rescan = ttk.Button(fbox); rescan.grid(row = 0, column = 3, sticky = 'n')
+    out_lbl = ttk.Label(fbox); out_lbl.grid(row = 1, column = 0, sticky = 'w', pady = (4, 0))
+    out_val = ttk.Label(fbox, foreground = '#444'); out_val.grid(row = 1, column = 1, sticky = 'w', padx = 6, pady = (4, 0))
+    fmt_box = ttk.Frame(frame)
+    fmt_lbl = ttk.Label(fmt_box); fmt_lbl.pack(side = 'left')
+    fmt_var = tk.StringVar()
+    fmt_combo = ttk.Combobox(fmt_box, textvariable = fmt_var, state = 'readonly', width = 18)
+    fmt_combo.pack(side = 'left', padx = 6)
+    if bridges.SYSTEM == 'windows' : fmt_box.grid(row = 3, column = 0, sticky = 'w', pady = (6, 0))
     cols = ('type', 'bridge', 'state')
-    tree = ttk.Treeview(frame, columns = cols, height = 10)
+    tree = ttk.Treeview(frame, columns = cols, height = 10, selectmode = 'browse')
     tree.column('#0', width = 240); tree.column('type', width = 110, anchor = 'center')
     tree.column('bridge', width = 250); tree.column('state', width = 120)
-    tree.grid(row = 3, column = 0, sticky = 'nsew', pady = (8, 0))
-    sb = ttk.Scrollbar(frame, orient = 'vertical', command = tree.yview); sb.grid(row = 3, column = 1, sticky = 'ns', pady = (8, 0))
+    tree.grid(row = 4, column = 0, sticky = 'nsew', pady = (8, 0))
+    sb = ttk.Scrollbar(frame, orient = 'vertical', command = tree.yview); sb.grid(row = 4, column = 1, sticky = 'ns', pady = (8, 0))
     tree.configure(yscrollcommand = sb.set)
-    progress = ttk.Progressbar(frame, mode = 'determinate'); progress.grid(row = 4, column = 0, columnspan = 2, sticky = 'ew', pady = (8, 0))
-    bottom = ttk.Frame(frame); bottom.grid(row = 5, column = 0, columnspan = 2, sticky = 'ew', pady = (8, 0))
+    progress = ttk.Progressbar(frame, mode = 'determinate'); progress.grid(row = 5, column = 0, columnspan = 2, sticky = 'ew', pady = (8, 0))
+    bottom = ttk.Frame(frame); bottom.grid(row = 6, column = 0, columnspan = 2, sticky = 'ew', pady = (8, 0))
     bottom.columnconfigure(0, weight = 1)
     status = ttk.Label(bottom, wraplength = 380); status.grid(row = 0, column = 0, sticky = 'w')
     log_btn = ttk.Button(bottom); log_btn.grid(row = 0, column = 1, padx = 4)
@@ -169,25 +191,33 @@ def main_window(opts : dict) :
 
     def state_text(pl) :
         if pl.error : return T('st_error', err = pl.error) if pl.error != 'blocked' else T('st_blocked')
+        if pl.state == 'dup' : return T('st_dup')
         return T('st_' + pl.state)
+
+    def todo_list() : return [p for p in st['plugins'] if p.selected and p.state in ('new', 'old')]
+    def row_text(pl) :
+        try : name = str(pl.path.relative_to(next(f for f in [INPUT] + st['folders'] if f in pl.path.parents)))
+        except (ValueError, StopIteration) : name = str(pl.path)
+        return ('\u2611 ' if pl.selected else '\u2610 ') + name
+    def fmt_names() : return [T('fmt_both'), T('fmt_vst2'), T('fmt_clap')]
 
     def refresh() :
         root.title(f'VST2Bridge Patcher {VERSION}')
-        intro.configure(text = T('intro') if bridges.SYSTEM == 'windows' else T('intro_posix')); folder_lbl.configure(text = T('folder')); folder_val.configure(text = str(st['folder']))
-        browse.configure(text = T('browse')); rescan.configure(text = T('rescan')); create_btn.configure(text = T('create'))
+        intro.configure(text = T('intro') if bridges.SYSTEM == 'windows' else T('intro_posix')); folder_lbl.configure(text = T('folders'))
+        folder_val.configure(text = '\n'.join(str(f) for f in [INPUT] + st['folders'])); out_lbl.configure(text = T('output')); out_val.configure(text = str(st['out']))
+        fmt_lbl.configure(text = T('out_format')); fmt_combo.configure(values = fmt_names(), state = 'disabled' if st['busy'] else 'readonly')
+        fmt_var.set(fmt_names()[bridges.FORMATS.index(st['fmt'])])
+        browse.configure(text = T('add_folder')); rescan.configure(text = T('rescan')); create_btn.configure(text = T('create'))
         log_btn.configure(text = T('changelog')); upd_btn.configure(text = T('upd_btn'))
         for c, k in (('#0', 'col_plugin'), ('type', 'col_type'), ('bridge', 'col_bridge'), ('state', 'col_state')) : tree.heading(c, text = T(k))
         tree.delete(*tree.get_children())
         for i, pl in enumerate(st['plugins']) :
-            try : name = str(pl.path.relative_to(st['folder']))
-            except ValueError : name = str(pl.path)
-            tree.insert('', 'end', iid = str(i), text = name,
+            tree.insert('', 'end', iid = str(i), text = row_text(pl),
                         values = (T('bits', bits = pl.bits), T('for_bits', name = pl.label, bits = pl.target_bits), state_text(pl)))
         key, kw = st['status']
         status.configure(text = T(key, **kw))
-        todo = [p for p in st['plugins'] if p.state in ('new', 'old')]
         busy = st['busy']
-        create_btn.configure(state = 'disabled' if busy or not todo else 'normal')
+        create_btn.configure(state = 'disabled' if busy or not todo_list() else 'normal')
         for b in (browse, rescan) : b.configure(state = 'disabled' if busy else 'normal')
         u = st['upd']
         if u['state'] == 'new' : upd_btn.grid(row = 0, column = 2, padx = 4)
@@ -198,20 +228,42 @@ def main_window(opts : dict) :
         st['lang'] = next(k for k, v in LANGUAGES.items() if v == lang_var.get()); refresh()
     lang_box.bind('<<ComboboxSelected>>', set_lang)
 
+    def set_fmt(_e = None) :
+        st['fmt'] = bridges.FORMATS[fmt_combo.current()]
+        for pl in st['plugins'] :
+            pl.fmt = st['fmt']
+            if pl.state != 'dup' : bridges.state(pl, BIN); pl.error = ''
+        n = len(st['plugins']); st['status'] = ('found', dict(n = n, todo = len(todo_list()))) if n else ('none_input', {}); refresh()
+    fmt_combo.bind('<<ComboboxSelected>>', set_fmt)
+
+    def toggle(_e) :
+        if st['busy'] : return
+        iid = tree.identify_row(_e.y) if _e.type == '4' else (tree.focus() if _e.type == '2' else '')
+        if not iid : return
+        pl = st['plugins'][int(iid)]
+        if pl.state in ('dup', 'blocked') : return
+        pl.selected = not pl.selected
+        (st['unsel'].discard if pl.selected else st['unsel'].add)(pl.path)
+        tree.item(iid, text = row_text(pl))
+        st['status'] = ('found', dict(n = len(st['plugins']), todo = len(todo_list())))
+        status.configure(text = T(*st['status'][:1], **st['status'][1])); create_btn.configure(state = 'normal' if todo_list() else 'disabled')
+    tree.bind('<Button-1>', toggle); tree.bind('<space>', toggle)
+
     missing = bridges.binaries_ok(BIN)
     wine_ok = bridges.SYSTEM == 'windows' or bridges.wine_found()
     def start_scan() :
         if missing : st['status'] = ('missing_bin', dict(names = ', '.join(missing))); st['busy'] = True; refresh(); return
         st.update(busy = True, plugins = [], status = ('scanning', {})); progress.configure(mode = 'indeterminate'); progress.start(12); refresh()
-        folder = st['folder']
-        threading.Thread(target = lambda : q.put(('scanned', bridges.scan(folder, BIN))), daemon = True).start()
+        folders, out, fmt = [INPUT] + st['folders'], st['out'], st['fmt']
+        threading.Thread(target = lambda : q.put(('scanned', bridges.scan(folders, BIN, out, fmt))), daemon = True).start()
 
     def choose() :
-        d = filedialog.askdirectory(initialdir = str(st['folder']), parent = root)
-        if d : st['folder'] = Path(d); start_scan()
+        d = filedialog.askdirectory(initialdir = str((st['folders'] or [HERE])[-1]), parent = root)
+        if d and Path(d) not in st['folders'] : st['folders'].append(Path(d))
+        if d : start_scan()
 
     def create() :
-        todo = [p for p in st['plugins'] if p.state in ('new', 'old')]
+        todo = todo_list()
         st['busy'] = True; progress.configure(mode = 'determinate', maximum = len(todo), value = 0); refresh()
         def work() :
             for i, pl in enumerate(todo) :
@@ -252,15 +304,15 @@ def main_window(opts : dict) :
                 if kind == 'scanned' :
                     progress.stop(); progress.configure(mode = 'determinate', value = 0)
                     st['plugins'] = msg[1]; st['busy'] = False
-                    todo = sum(p.state in ('new', 'old') for p in msg[1])
-                    st['status'] = ('found', dict(n = len(msg[1]), todo = todo)) if msg[1] else ('none', {})
+                    for p in msg[1] : p.selected = p.path not in st['unsel']
+                    st['status'] = ('found', dict(n = len(msg[1]), todo = len(todo_list()))) if msg[1] else ('none_input', {})
                     if any(p.state == 'blocked' for p in msg[1]) : st['status'] = ('blocked_hint', {})
                     if bridges.SYSTEM != 'windows' and not wine_ok : st['status'] = ('no_wine', {})
                 elif kind == 'progress' :
                     progress.configure(value = msg[1]); st['status'] = ('creating', dict(i = msg[1], n = msg[2]))
                 elif kind == 'created' :
                     fail = sum(1 for p in msg[1] if p.error); st['busy'] = False
-                    st['status'] = ('done_fail', dict(ok = len(msg[1]) - fail, fail = fail)) if fail else ('done', dict(ok = len(msg[1])))
+                    st['status'] = ('done_fail', dict(ok = len(msg[1]) - fail, fail = fail)) if fail else ('done_out', dict(ok = len(msg[1]), out = str(st['out'])))
                 elif kind == 'status' : st['status'] = (msg[1], {})
                 elif kind == 'upd' :
                     rev, err = msg[1], msg[2]
@@ -302,7 +354,7 @@ def main() :
     for name, env in (('--update-dir', 'VB_UPDATE_DIR'), ('--update-test-version', 'VB_UPDATE_TEST_VERSION')) :
         if opt(name) : os.environ[env] = opt(name)
     main_window(dict(after_update = opt('--after-update'), no_update_check = '--no-update-check' in args or None,
-                     folder = opt('--folder')))
+                     folder = opt('--folder'), output = opt('--output')))
 
 if __name__ == '__main__' :
     main()

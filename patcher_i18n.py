@@ -1,6 +1,6 @@
 # Texts of the patcher window (patcher.py), one entry per language. Keys missing in a language fall back to English.
 # Same 29 languages as the SXG-Create-NF patcher. Placeholders: {bits}, {name}, {err}, {n}, {todo}, {i}, {ok}, {fail},
-# {names}, {ver}, {pct}, {old}.
+# {names}, {ver}, {pct}, {old}, {out}.
 # LANGUAGES: name of each language in itself, in the order of the menu: alphabetical by the Latin spelling of that
 # name, so languages in other scripts sit where their name would be in Latin letters.
 LANGUAGES = {
@@ -430,7 +430,20 @@ _X = {
         '未找到 Wine。请安装 Wine：CLAP 桥接借助它运行插件。'),
 }
 
+# Texts of the input / output folders, the plugin checkboxes and the Windows output format (#9). Only English and German so
+# far; the other languages show the English text until they are translated.
+NEW_KEYS = ('folders', 'add_folder', 'output', 'out_format', 'fmt_both', 'fmt_vst2', 'fmt_clap', 'st_dup', 'none_input', 'done_out')
+_N = {
+'en' : ('Search in:', 'Add folder…', 'Output folder:', 'Output format:', 'VST2 + CLAP', 'VST2 only', 'CLAP only', 'name taken',
+        'No VST2 plugins found. Put the plugin DLLs into the "input" folder next to the patcher (subfolders are fine) or add another folder.',
+        '{ok} plugin(s) written to {out}.'),
+'de' : ('Suchen in:', 'Ordner hinzufügen…', 'Ausgabeordner:', 'Ausgabeformat:', 'VST2 + CLAP', 'Nur VST2', 'Nur CLAP', 'Name doppelt',
+        'Keine VST2-Plugins gefunden. Legen Sie die Plugin-DLLs in den Ordner "input" neben dem Patcher (Unterordner gehen auch) oder fügen Sie einen anderen Ordner hinzu.',
+        '{ok} Plugin(s) nach {out} geschrieben.'),
+}
+
 TEXT = {lang : dict(zip(KEYS, t)) for lang, t in _T.items()}
+for _lang, _t in _N.items() : TEXT[_lang].update(zip(NEW_KEYS, _t))
 for _lang, _t in _X.items() : TEXT[_lang].update(zip(EXTRA_KEYS, _t))
 assert all(len(t) == len(KEYS) for t in _T.values()), 'every language needs one text per key'
 assert set(TEXT) == set(LANGUAGES), 'LANGUAGES and TEXT must list the same languages'
