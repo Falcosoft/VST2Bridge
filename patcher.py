@@ -8,9 +8,9 @@
 # bridge files of its system (bridge/: mingw-w64 for the Windows files and helpers, gcc / clang for the Linux / macOS
 # CLAP) and docs/versions.md.
 # * Plugins are searched in the subfolder "input" of the patcher's folder (subfolders of it included) and in the folders
-#   the user adds; each plugin has a checkbox (all selected at the start). The bridges, the helper
-#   exe and <name>.vst2bridge (path of the original, which is not copied) are written into the subfolder "output" of
-#   the patcher's folder (utility/bridges.py). Windows only: the output
+#   the user adds; each plugin has a checkbox (all selected at the start). The patcher moves each plugin into the
+#   subfolder "output" of the patcher's folder (input stays empty) and writes the bridges and the helper exe there
+#   (utility/bridges.py); plugins already in "output" are listed as well. Windows only: the output
 #   format (VST2 + CLAP, VST2 only, CLAP only).
 # * patcher --cli [folder] [--dry-run] [--output <folder>] [--format both|vst2|clap]   the same without a window
 #   (input + folder if given; --format counts for the Windows patcher only)

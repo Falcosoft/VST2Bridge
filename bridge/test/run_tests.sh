@@ -24,14 +24,11 @@ i686-w64-mingw32-gcc   $CF -o "$T/testclap32.exe" test/testclap.c -static -s
 x86_64-w64-mingw32-gcc $CF -o "$T/testclap64.exe" test/testclap.c -static -s
 gcc $CF -o "$T/testclap" test/testclap.c -lxcb -ldl
 gcc $CF -Wno-format-truncation -DVB_FLOATING_GUI -shared -fPIC -fvisibility=hidden -o "$T/floating.clap" clap.c stub.c -lpthread
-# the layout the patcher writes: the bridges (VST2 and CLAP), the helper and fake.vst2bridge (path of the original, which
-# stays in its own folder "orig..." and is not copied)
-mkdir -p "$T/a" "$T/b" "$T/orig32" "$T/orig64"
-cp "$T/fake32.dll" "$T/orig32/fake.dll"; cp "$T/fake64.dll" "$T/orig64/fake.dll"
-winepath -w "$T/orig32/fake.dll" > "$T/a/fake.vst2bridge"; winepath -w "$T/orig64/fake.dll" > "$T/b/fake.vst2bridge"
-cp vst2bridge-x64.dll "$T/a/fake_x64.dll"; cp vst2bridge-x64.clap "$T/a/fake_x64.clap"; cp vst2bridge-host32.exe "$T/a/"
-cp vst2bridge-x86.dll "$T/b/fake_x86.dll"; cp vst2bridge-x86.clap "$T/b/fake_x86.clap"; cp vst2bridge-host64.exe "$T/b/"
-# the CLAP alone (no bridge DLL next to it) with the plugin copied next to it (no .vst2bridge file): plugin + helper + .clap
+# the layout the patcher writes: the bridges (VST2 and CLAP) and the helper next to the plugin
+mkdir -p "$T/a" "$T/b"
+cp "$T/fake32.dll" "$T/a/fake.dll"; cp vst2bridge-x64.dll "$T/a/fake_x64.dll"; cp vst2bridge-x64.clap "$T/a/fake_x64.clap"; cp vst2bridge-host32.exe "$T/a/"
+cp "$T/fake64.dll" "$T/b/fake.dll"; cp vst2bridge-x86.dll "$T/b/fake_x86.dll"; cp vst2bridge-x86.clap "$T/b/fake_x86.clap"; cp vst2bridge-host64.exe "$T/b/"
+# the CLAP alone (no bridge DLL next to it): plugin + helper + .clap, as when only the .clap is copied
 mkdir -p "$T/ca" "$T/cb"
 cp "$T/fake32.dll" "$T/ca/fake.dll"; cp vst2bridge-x64.clap "$T/ca/fake_x64.clap"; cp vst2bridge-host32.exe "$T/ca/"
 cp "$T/fake64.dll" "$T/cb/fake.dll"; cp vst2bridge-x86.clap "$T/cb/fake_x86.clap"; cp vst2bridge-host64.exe "$T/cb/"
@@ -48,10 +45,9 @@ echo "== old instrument (no synth flag, no effCanDo) as CLAP, as Woof! checks it
 wine "$T/testclap64.exe" "$(winepath -w "$T/ca/fake_x64.clap")" plain || st=1
 wine "$T/testclap32.exe" "$(winepath -w "$T/cb/fake_x86.clap")" plain || st=1
 # Linux / macOS layout: <name>.clap next to <name>.dll and the helper of the plugin's bitness
-# (l32 / l64: the plugin stays in orig32 / orig64 and fake.vst2bridge names it; m32: the plugin is next to the CLAP)
 mkdir -p "$T/l32" "$T/l64" "$T/m32"
-echo "$T/orig32/fake.dll" > "$T/l32/fake.vst2bridge"; cp vst2bridge-linux.clap "$T/l32/fake.clap"; cp vst2bridge-host32.exe "$T/l32/"
-echo "$T/orig64/fake.dll" > "$T/l64/fake.vst2bridge"; cp vst2bridge-linux.clap "$T/l64/fake.clap"; cp vst2bridge-host64.exe "$T/l64/"
+cp "$T/fake32.dll" "$T/l32/fake.dll"; cp vst2bridge-linux.clap "$T/l32/fake.clap"; cp vst2bridge-host32.exe "$T/l32/"
+cp "$T/fake64.dll" "$T/l64/fake.dll"; cp vst2bridge-linux.clap "$T/l64/fake.clap"; cp vst2bridge-host64.exe "$T/l64/"
 cp "$T/fake32.dll" "$T/m32/fake.dll"; cp "$T/floating.clap" "$T/m32/fake.clap"; cp vst2bridge-host32.exe "$T/m32/"
 echo "== Linux CLAP, 32-bit plugin under Wine"
 "$T/testclap" "$T/l32/fake.clap" Fake32 || st=1
