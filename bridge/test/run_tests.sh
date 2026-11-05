@@ -64,5 +64,20 @@ echo "== macOS variant (floating editor), 32-bit plugin under Wine"
 echo "== Linux CLAP, old instrument (as Woof! checks it), 32-bit and 64-bit plugin"
 "$T/testclap" "$T/l32/fake.clap" Fake32 plain || st=1
 "$T/testclap" "$T/l64/fake.clap" Fake64 plain || st=1
+# Sanitizers (native part only: the Linux CLAP, its threads, sockets and shared memory; the helpers are Windows programs).
+# ASan + UBSan fail the run on any finding. TSan cannot see the helper under Wine and does not understand
+# __atomic_thread_fence, so it is not part of this script (run it by hand: gcc -fsanitize=thread, same flags).
+echo "== Linux CLAP and test host with AddressSanitizer + UndefinedBehaviorSanitizer"
+SF="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=undefined"
+gcc $CF $SF -Wno-format-truncation -shared -fPIC -fvisibility=hidden -o "$T/san.clap" clap.c stub.c -lxcb -lpthread
+gcc $CF $SF -o "$T/testclap_san" test/testclap.c -lxcb -ldl
+mkdir -p "$T/s32" "$T/s64"
+cp "$T/fake32.dll" "$T/s32/fake.dll"; cp "$T/san.clap" "$T/s32/fake.clap"; cp vst2bridge-host32.exe "$T/s32/"
+cp "$T/fake64.dll" "$T/s64/fake.dll"; cp "$T/san.clap" "$T/s64/fake.clap"; cp vst2bridge-host64.exe "$T/s64/"
+export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+"$T/testclap_san" "$T/s32/fake.clap" Fake32 || st=1
+"$T/testclap_san" "$T/s64/fake.clap" Fake64 || st=1
+"$T/testclap_san" "$T/s32/fake.clap" Fake32 plain || st=1
+unset ASAN_OPTIONS UBSAN_OPTIONS
 [ -z "$(ls /dev/shm 2>/dev/null | grep '^vst2bridge_' || true)" ] || { echo "FAIL: shared files left in /dev/shm"; st=1; }
 [ $st = 0 ] && echo "ALL BRIDGE TESTS PASSED" || { echo "BRIDGE TESTS FAILED"; exit 1; }

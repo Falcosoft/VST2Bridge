@@ -16,6 +16,7 @@ typedef DWORD vb_tid;
 static inline vb_tid vb_self(void) { return GetCurrentThreadId(); }
 #define vb_barrier()        MemoryBarrier()
 #define vb_xchg(p, v)       InterlockedExchange((volatile LONG*)(p), (LONG)(v))
+#define vb_load(p)          (*(volatile LONG*)(p))
 #define vb_inc(p)           InterlockedIncrement((volatile LONG*)(p))
 #define vb_cas(p, old, new) (InterlockedCompareExchange((volatile LONG*)(p), (LONG)(new), (LONG)(old)) == (LONG)(old))
 #define VB_EXPORT           __declspec(dllexport)
@@ -35,6 +36,7 @@ typedef uintptr_t vb_tid;                               // 0 = no thread
 static inline vb_tid vb_self(void) { return (vb_tid)pthread_self(); }
 #define vb_barrier()        __atomic_thread_fence(__ATOMIC_SEQ_CST)
 #define vb_xchg(p, v)       __atomic_exchange_n((p), (v), __ATOMIC_SEQ_CST)
+#define vb_load(p)          __atomic_load_n((p), __ATOMIC_SEQ_CST)
 #define vb_inc(p)           __atomic_add_fetch((p), 1, __ATOMIC_SEQ_CST)
 static inline int vb_cas_(volatile int32_t* p, int32_t old, int32_t nw) { return __atomic_compare_exchange_n(p, &old, nw, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); }
 #define vb_cas(p, old, new) vb_cas_((volatile int32_t*)(p), (old), (new))

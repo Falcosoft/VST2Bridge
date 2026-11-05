@@ -3,7 +3,7 @@ name: Check
 # Pull requests (and manual runs):
 # - Linux: builds the bridge with mingw-w64 and the Linux CLAP with gcc, runs the bridge tests under Wine
 #   (bridge/test/run_tests.sh: both Windows directions, the Linux CLAP with a 32-bit and a 64-bit plugin, the macOS
-#   variant of the CLAP built on Linux) and checks the patcher from source (syntax, --selftest, --cli as the Windows
+#   variant of the CLAP built on Linux, and the Linux CLAP again with ASan + UBSan) and checks the patcher from source (syntax, --selftest, --cli as the Windows
 #   and as the Linux patcher).
 # - macOS: builds the universal CLAP, freezes the patcher like the release (--selftest must see arm64 + x86_64), lets
 #   it write a .clap bundle, verifies the signature and loads the bundle (without Wine: entry and factory only).
