@@ -14,12 +14,14 @@
 #   format (VST2 + CLAP, VST2 only, CLAP only).
 # * patcher --cli [folder] [--dry-run] [--output <folder>] [--format both|vst2|clap]   the same without a window
 #   (input + folder if given; --format counts for the Windows patcher only)
+# * The output folder can be changed in the window (button next to "Output folder:"); the choice is remembered in
+#   settings.json of the user's settings folder (%APPDATA%\\VST2Bridge, ~/.config/vst2bridge); --output wins over it.
 # * patcher --selftest [--selftest-out <file>]   checks that the bundled files are there (used by the build and the update)
 # * Update: a release patcher looks for a newer release a moment after it has started and offers it with the Update
 #   button (utility/selfupdate.py); --no-update-check (or VB_NO_UPDATE_CHECK=1) leaves out the check at the start.
 #   Test options: --update-dir <folder with release files>, --update-test-version r<N>; --after-update <old> is used by
 #   the update itself.
-import sys, os, threading, queue, locale, subprocess
+import sys, os, threading, queue, locale, subprocess, json
 from pathlib import Path
 
 FROZEN = getattr(sys, 'frozen', False)
@@ -74,6 +76,27 @@ def attach_console() :
         if ctypes.windll.kernel32.AttachConsole(-1) :              # ATTACH_PARENT_PROCESS
             sys.stdout = sys.stderr = open('CONOUT$', 'w', encoding = 'utf-8', errors = 'replace')
     except Exception : pass
+
+def settings_file() -> Path :
+    base = Path(os.environ.get('APPDATA') or Path.home() / 'AppData' / 'Roaming') if sys.platform == 'win32' else \
+           Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') if sys.platform != 'darwin' else \
+           Path.home() / 'Library' / 'Application Support'
+    return base / ('VST2Bridge' if sys.platform in ('win32', 'darwin') else 'vst2bridge') / 'settings.json'
+
+def load_output() -> Path | None :
+    """The output folder chosen in an earlier run (None if there is none or it can't be read)."""
+    try :
+        d = json.loads(settings_file().read_text(encoding = 'utf-8')).get('output')
+        return Path(d) if isinstance(d, str) and d else None
+    except (OSError, ValueError, AttributeError) : return None
+
+def save_output(out : Path | None) -> None :
+    """Remember the output folder (None = back to the default); a failure is ignored."""
+    f = settings_file()
+    try :
+        f.parent.mkdir(parents = True, exist_ok = True)
+        f.write_text(json.dumps({'output' : str(out)} if out else {}), encoding = 'utf-8')
+    except OSError : pass
 
 def run_cli(args : list[str]) -> int :
     attach_console()
@@ -150,7 +173,7 @@ def main_window(opts : dict) :
     except Exception : pass                                     # a missing icon must never stop the patcher
     try : INPUT.mkdir(exist_ok = True)
     except OSError : pass
-    st = dict(lang = system_language(LANGUAGES), folders = [Path(opts['folder'])] if opts.get('folder') else [], out = Path(opts.get('output') or OUTPUT),
+    st = dict(lang = system_language(LANGUAGES), folders = [Path(opts['folder'])] if opts.get('folder') else [], out = Path(opts.get('output') or load_output() or OUTPUT),
               fmt = 'both', unsel = set(), plugins = [], busy = False,
               status = ('scanning', {}), upd = dict(state = 'off'))
     q = queue.Queue()
@@ -173,7 +196,8 @@ def main_window(opts : dict) :
     browse = ttk.Button(fbox); browse.grid(row = 0, column = 2, padx = (0, 4), sticky = 'n')
     rescan = ttk.Button(fbox); rescan.grid(row = 0, column = 3, sticky = 'n')
     out_lbl = ttk.Label(fbox); out_lbl.grid(row = 1, column = 0, sticky = 'w', pady = (4, 0))
-    out_val = ttk.Label(fbox, foreground = '#444'); out_val.grid(row = 1, column = 1, sticky = 'w', padx = 6, pady = (4, 0))
+    out_val = ttk.Label(fbox, foreground = '#444', wraplength = 400, justify = 'left'); out_val.grid(row = 1, column = 1, sticky = 'w', padx = 6, pady = (4, 0))
+    out_btn = ttk.Button(fbox); out_btn.grid(row = 1, column = 2, columnspan = 2, padx = (0, 4), pady = (4, 0), sticky = 'ew')
     fmt_box = ttk.Frame(frame)
     fmt_lbl = ttk.Label(fmt_box); fmt_lbl.pack(side = 'left')
     fmt_var = tk.StringVar()
@@ -213,7 +237,7 @@ def main_window(opts : dict) :
         folder_val.configure(text = '\n'.join(str(f) for f in [INPUT] + st['folders'])); out_lbl.configure(text = T('output')); out_val.configure(text = str(st['out']))
         fmt_lbl.configure(text = T('out_format')); fmt_combo.configure(values = fmt_names(), state = 'disabled' if st['busy'] else 'readonly')
         fmt_var.set(fmt_names()[bridges.FORMATS.index(st['fmt'])])
-        browse.configure(text = T('add_folder')); rescan.configure(text = T('rescan')); create_btn.configure(text = T('create'))
+        browse.configure(text = T('add_folder')); out_btn.configure(text = T('out_change')); rescan.configure(text = T('rescan')); create_btn.configure(text = T('create'))
         log_btn.configure(text = T('changelog')); upd_btn.configure(text = T('upd_btn'))
         for c, k in (('#0', 'col_plugin'), ('type', 'col_type'), ('bridge', 'col_bridge'), ('state', 'col_state')) : tree.heading(c, text = T(k))
         tree.delete(*tree.get_children())
@@ -224,7 +248,7 @@ def main_window(opts : dict) :
         status.configure(text = T(key, **kw))
         busy = st['busy']
         create_btn.configure(state = 'disabled' if busy or not todo_list() else 'normal')
-        for b in (browse, rescan) : b.configure(state = 'disabled' if busy else 'normal')
+        for b in (browse, rescan, out_btn) : b.configure(state = 'disabled' if busy else 'normal')
         u = st['upd']
         if u['state'] == 'new' : upd_btn.grid(row = 0, column = 2, padx = 4)
         else : upd_btn.grid_remove()
@@ -267,6 +291,14 @@ def main_window(opts : dict) :
         d = filedialog.askdirectory(initialdir = str((st['folders'] or [HERE])[-1]), parent = root)
         if d and Path(d) not in st['folders'] : st['folders'].append(Path(d))
         if d : start_scan()
+
+    def choose_out() :
+        d = filedialog.askdirectory(initialdir = str(st['out'] if st['out'].is_dir() else st['out'].parent), parent = root, mustexist = False)
+        if not d or Path(d).resolve() == st['out'].resolve() : return
+        st['out'] = Path(d).resolve()
+        if st['out'] != OUTPUT.resolve() : save_output(st['out'])
+        else : save_output(None)
+        start_scan()
 
     def create() :
         todo = todo_list()
@@ -338,7 +370,7 @@ def main_window(opts : dict) :
         except queue.Empty : pass
         root.after(80, poll)
 
-    browse.configure(command = choose); rescan.configure(command = start_scan); create_btn.configure(command = create)
+    browse.configure(command = choose); out_btn.configure(command = choose_out); rescan.configure(command = start_scan); create_btn.configure(command = create)
     log_btn.configure(command = show_log); upd_btn.configure(command = do_update)
     if opts.get('after_update') :
         threading.Thread(target = selfupdate.after_update, args = (opts['after_update'], FROZEN), daemon = True).start()
