@@ -73,7 +73,8 @@ jobs:
           python3 patcher.py --cli "$T/Input" --output "$T/LinOut" | grep -c current | grep -qx 2
           echo "== the patcher's own folder as a source (top level only)"
           mkdir -p "$T/Root/sub" "$T/Root/out"
-          cp "$T/Input/plug32.dll" "$T/Root/"; cp "$T/Input/sub/plug64.dll" "$T/Root/sub/"; cp "$T/LinOut/plug32.clap" "$T/LinOut/vst2bridge-host32.exe" "$T/Root/"
+          cp fake/plug32.dll "$T/Root/"; cp "$T/LinOut/plug64.dll" "$T/Root/sub/";   # the Linux run above moved the plugins out of Input
+          cp "$T/LinOut/plug32.clap" "$T/LinOut/vst2bridge-host32.exe" "$T/Root/"
           python3 -I - "$T/Root" "$T/Root/out" <<'PY'
           import sys; sys.path.insert(0, 'utility'); from pathlib import Path; import bridges
           root, out = Path(sys.argv[1]), Path(sys.argv[2])
