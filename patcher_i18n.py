@@ -435,10 +435,10 @@ _X = {
 NEW_KEYS = ('folders', 'add_folder', 'output', 'out_format', 'fmt_both', 'fmt_vst2', 'fmt_clap', 'st_dup', 'none_input', 'done_out', 'out_change')
 _N = {
 'en' : ('Search in:', 'Add folder…', 'Output folder:', 'Output format:', 'VST2 + CLAP', 'VST2 only', 'CLAP only', 'name taken',
-        'No VST2 plugins found. Put the plugin DLLs into the "input" folder next to the patcher (subfolders are fine) or add another folder.',
+        'No VST2 plugins found. Put the plugin DLLs into the "input" folder or next to the patcher (subfolders of "input" are fine) or add another folder.',
         '{ok} plugin(s) written to {out}.', 'Change…'),
 'de' : ('Suchen in:', 'Ordner hinzufügen…', 'Ausgabeordner:', 'Ausgabeformat:', 'VST2 + CLAP', 'Nur VST2', 'Nur CLAP', 'Name doppelt',
-        'Keine VST2-Plugins gefunden. Legen Sie die Plugin-DLLs in den Ordner "input" neben dem Patcher (Unterordner gehen auch) oder fügen Sie einen anderen Ordner hinzu.',
+        'Keine VST2-Plugins gefunden. Legen Sie die Plugin-DLLs in den Ordner "input" oder neben den Patcher (Unterordner von "input" gehen auch) oder fügen Sie einen anderen Ordner hinzu.',
         '{ok} Plugin(s) nach {out} geschrieben.', 'Ändern…'),
 }
 

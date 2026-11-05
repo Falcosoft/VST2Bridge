@@ -1,7 +1,7 @@
 # Finds VST2 plugins and writes the bridges into the output folder (the work behind patcher.py). Everything for one plugin
 # ends up in the same folder: the plugin DLL itself (the bridge looks for <name>.dll next to itself), the bridge files and
 # the helper exe. The patcher MOVES the original plugin from where it was found (input) into the output folder, so input is
-# empty afterwards; plugins already in the output folder are listed too, so that old bridges can be refreshed there.
+# empty afterwards (the patcher's own folder counts as a source too, its top level only); plugins already in the output folder are listed too, so that old bridges can be refreshed there.
 # Windows patcher (FORMATS: 'both' = VST2 + CLAP, 'vst2', 'clap'):
 #   32-bit plugin  name.dll  ->  name_x64.dll (vst2bridge-x64.dll) + name_x64.clap (vst2bridge-x64.clap)
 #                                + vst2bridge-host32.exe                                     for 64-bit hosts
@@ -70,12 +70,15 @@ def clap_bytes(bin_dir : Path) -> bytes :
     f = bin_dir / POSIX_CLAP[SYSTEM]
     return f.read_bytes() if f.is_file() else gzip.decompress((bin_dir / (f.name + '.gz')).read_bytes())
 
-def scan(folders : list[Path], bin_dir : Path, out_dir : Path, fmt : str = 'both', log = lambda m : None) -> list[Plugin] :
-    """VST2 plugins in out_dir (already moved there) and in the folders (subfolders included)."""
+def scan(folders : list[Path], bin_dir : Path, out_dir : Path, fmt : str = 'both', log = lambda m : None, flat : list[Path] = ()) -> list[Plugin] :
+    """VST2 plugins in out_dir (already moved there), in the folders (subfolders included) and directly in the flat folders
+    (no subfolders: the patcher's own folder, whose subfolders input / output and so on are searched on their own terms).
+    Bridges, CLAP bridges and JBridge files are skipped, as is anything that is not a VST2 plugin, and a plugin reachable
+    through two folders is listed once."""
     found, seen, names = [], set(), {}
-    for folder in [out_dir] + list(folders) :
+    for folder, deep in [(out_dir, True)] + [(f, True) for f in folders] + [(f, False) for f in flat] :
         if not folder.is_dir() : continue
-        for p in sorted(folder.rglob('*.dll'), key = lambda q : str(q).lower()) :
+        for p in sorted(folder.rglob('*.dll') if deep else folder.glob('*.dll'), key = lambda q : str(q).lower()) :
             if any(part in SKIP_DIRS for part in p.relative_to(folder).parts) or not p.is_file() : continue
             try : real = p.resolve()
             except OSError : real = p

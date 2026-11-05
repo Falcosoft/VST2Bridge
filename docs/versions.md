@@ -4,6 +4,7 @@ What changed in each Autobuild release, newest first. Releases are numbered `r<N
 
 | Release | Date | Changes |
 |---|---|---|
+| next | | Patcher: plugin DLLs lying directly in the patcher's own folder are found as well (not only in `input` or an added folder); the bridges, helper files and the `output` folder are not mistaken for plugins. |
 | next | | Patcher: the output folder can be chosen in the window (**Change…** next to *Output folder*); the choice is remembered for the next start. `--output` on the command line still wins. |
 | r9 | 2026-11-05 | Patcher: the original plugins are no longer copied but moved from `input` (or an added folder) into `output`, so `input` is empty afterwards and `output` holds everything for the host: plugin, bridge files and helper exe. Plugins already in `output` are listed too, so their bridges can be refreshed. |
 | r9 | 2026-11-05 | Patcher: new program icon (the one of the SXG-Create-NF patcher) for the Windows exe, the macOS app and the window on all systems. |
