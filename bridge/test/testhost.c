@@ -167,49 +167,23 @@ int main(int argc, char** argv)
     fx->dispatcher(fx, effMainsChanged, 0, 0, 0, 0);
     fx->dispatcher(fx, effClose, 0, 0, 0, 0);
 
-    // resampling: at 32000 Hz the plugin runs at 44100 Hz
+    // the host's sample rate reaches the plugin unchanged, whatever it is (no conversion in the bridge)
     {
-        g_rate = 32000;
-        AEffect* r2 = entry(master);
-        CHECK(r2 != 0, "another instance for resampling");
-        if (!r2) return fails + 1;
-        r2->dispatcher(r2, effOpen, 0, 0, 0, 0);
-        r2->dispatcher(r2, effSetSampleRate, 0, 0, 0, 32000.0f);
-        r2->dispatcher(r2, effSetBlockSize, 0, 512, 0, 0);
-        r2->dispatcher(r2, effMainsChanged, 0, 1, 0, 0);
-        intptr_t r0 = r2->dispatcher(r2, effGetTailSize, 0, 0, 0, 0), r1 = r2->dispatcher(r2, effGetTailSize, 1, 0, 0, 0);
-        CHECK(r0 == 44100 && r1 == 44100, "host at 32000 Hz: plugin set to %d Hz, audioMasterGetSampleRate answers %d", (int)r0, (int)r1);
-        CHECK(r2->initialDelay == 52, "latency in host samples (plugin 64 + interpolators): %d", r2->initialDelay);
-        for (int i = 0; i < 12000; i++) { inL[i] = 0.2f; inR[i] = -0.2f; }
-        memset(&ev, 0, sizeof ev); ev.numEvents = 1; ev.ev[0] = (VstEvent*)&on;
-        r2->dispatcher(r2, effProcessEvents, 0, 0, &ev, 0);
-        r2->processReplacing(r2, in, out, 512);
-        CHECK(fabsf(outL[50] - 0.1f) < 1e-5f && fabsf(outR[95] + 0.1f) < 1e-5f, "resampled audio in -> out: %f %f", outL[50], outR[95]);
-        CHECK(fabsf(outL[110] - 1.1f) < 1e-5f && fabsf(outL[511] - 1.1f) < 1e-5f, "note-on near its frame (%f at 99, %f at 110)", outL[99], outL[110]);
-        CHECK(n_midiout == 2, "MIDI out of the resampled plugin");
-        r2->processReplacing(r2, in, out, 10000);
-        CHECK(fabsf(outL[5000] - 1.1f) < 1e-5f && fabsf(outR[9999] - 0.9f) < 1e-5f, "long block resampled: %f %f", outL[5000], outR[9999]);
-        r2->dispatcher(r2, effMainsChanged, 0, 0, 0, 0);
-        r2->dispatcher(r2, effClose, 0, 0, 0, 0);
-    }
-    // vst2bridge.ini next to the plugin overrides the rate
-    {
-        char ini[MAX_PATH]; GetFullPathNameA(argv[1], MAX_PATH, ini, 0);
-        char* sl = strrchr(ini, '\\'); if (sl) strcpy(sl + 1, "vst2bridge.ini");
-        struct { const char* v; int host, want; } c[] = { { "0", 32000, 32000 }, { "48000", 44100, 48000 } };
-        for (int k = 0; k < 2; k++) {
-            WritePrivateProfileStringA("fake", "SampleRate", c[k].v, ini);
-            WritePrivateProfileStringA(0, 0, 0, ini);                  // flush the profile cache
-            g_rate = c[k].host;
-            AEffect* r3 = entry(master);
-            if (!r3) { CHECK(0, "instance for the ini test"); continue; }
-            r3->dispatcher(r3, effOpen, 0, 0, 0, 0);
-            r3->dispatcher(r3, effSetSampleRate, 0, 0, 0, (float)c[k].host);
-            intptr_t got = r3->dispatcher(r3, effGetTailSize, 0, 0, 0, 0);
-            CHECK(got == c[k].want, "vst2bridge.ini SampleRate=%s at %d Hz: plugin at %d Hz", c[k].v, c[k].host, (int)got);
-            r3->dispatcher(r3, effClose, 0, 0, 0, 0);
+        static const int rates[] = { 32000, 22050, 44100, 96000 };
+        for (unsigned k = 0; k < sizeof rates / sizeof rates[0]; k++) {
+            g_rate = rates[k];
+            AEffect* r2 = entry(master);
+            if (!r2) { CHECK(0, "another instance for the rate test"); continue; }
+            r2->dispatcher(r2, effOpen, 0, 0, 0, 0);
+            r2->dispatcher(r2, effSetSampleRate, 0, 0, 0, (float)rates[k]);
+            r2->dispatcher(r2, effSetBlockSize, 0, 512, 0, 0);
+            r2->dispatcher(r2, effMainsChanged, 0, 1, 0, 0);
+            intptr_t r0 = r2->dispatcher(r2, effGetTailSize, 0, 0, 0, 0), r1 = r2->dispatcher(r2, effGetTailSize, 1, 0, 0, 0);
+            CHECK(r0 == rates[k] && r1 == rates[k], "host at %d Hz: plugin set to %d Hz, audioMasterGetSampleRate answers %d", rates[k], (int)r0, (int)r1);
+            CHECK(r2->initialDelay == 64, "latency unchanged at %d Hz: %d", rates[k], r2->initialDelay);
+            r2->dispatcher(r2, effMainsChanged, 0, 0, 0, 0);
+            r2->dispatcher(r2, effClose, 0, 0, 0, 0);
         }
-        DeleteFileA(ini);
     }
 
     printf("RESULT: %s (%d failures)\n", fails ? "FAILED" : "PASSED", fails);

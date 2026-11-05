@@ -101,22 +101,7 @@ Plugin → host: value-only calls (`audioMasterAutomate`, `Version`, `Idle`, `IO
 
 ## Sample rates
 
-Some plugins play correctly only at the usual rates (S-YXG50 at 32000 Hz plays at the wrong pitch). When the host sets a rate other than 44100, 48000, 88200, 96000, 176400 or 192000 Hz (e.g. 32000, 22050, 11025 Hz), the helper runs the plugin at 44100 Hz and converts:
-
-- inputs are interpolated from the host's rate to the plugin's, outputs back (cubic interpolation, 3 samples of delay each; the reported `initialDelay` includes them and is given in host samples),
-- MIDI and SysEx go to the plugin frame that matches their host frame; MIDI from the plugin is moved back to host frames,
-- `audioMasterGetSampleRate` answers the plugin's rate and `audioMasterGetTime` gives it with the position in plugin samples; `effSetBlockSize` is scaled (the helper renders at most 512 host frames at once).
-
-`vst2bridge.ini` in the plugin's folder overrides the choice, per plugin (`[<plugin file name without .dll>]`) or for all plugins in the folder (`[Default]`):
-
-```
-[syxg50]
-SampleRate=48000   ; the plugin always runs at 48000 Hz (any host rate is converted)
-[Default]
-SampleRate=0       ; never convert: the plugin gets the host's rate
-```
-
-The bridge DLL and the CLAP bridge both use it, because it happens in the helper.
+The bridge does no sample rate handling of its own. The rate the host sets with `effSetSampleRate` (or CLAP `activate`) goes to the plugin unchanged, `audioMasterGetSampleRate` and the `sampleRate` in `audioMasterGetTime` answer the host's rate, and `initialDelay` is the plugin's own. Earlier releases (r4 to r6) converted unusual host rates to 44100 Hz and read `SampleRate` from `vst2bridge.ini`; both are gone, and a `vst2bridge.ini` is ignored.
 
 ## Failure
 

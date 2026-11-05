@@ -38,10 +38,6 @@ static VstTimeInfo time_info[3];                // per channel: the plugin keeps
 static char     directory[VB_STR_MAX];
 static wchar_t  plugin_path[MAX_PATH];
 
-// Sample rates the plugin may not support (see "resampling" below): the plugin runs at plug_rate, step = plugin samples per host
-// sample (1.0 = no resampling). Set by effSetSampleRate.
-static double   host_rate = 44100, plug_rate = 44100, step = 1.0;
-#define RS_DELAY 3                              // samples of delay of each interpolator (cubic needs 2 ahead)
 
 typedef struct {
     int32_t op, index; int64_t value; float opt;
@@ -51,7 +47,6 @@ typedef struct {
 } Req;
 
 static void serve_req(VbFrame* f);
-static int32_t rs_out_delta(int32_t d);
 
 static void fill_info(void)
 {
@@ -59,8 +54,7 @@ static void fill_info(void)
     if (!fx) return;
     i->numPrograms = fx->numPrograms; i->numParams = fx->numParams; i->numInputs = fx->numInputs; i->numOutputs = fx->numOutputs;
     i->flags = fx->flags; i->uniqueID = fx->uniqueID; i->version = fx->version;
-    i->initialDelay = step == 1.0 ? fx->initialDelay      // in host samples: the plugin's own delay plus the interpolators'
-        : (int32_t)((fx->initialDelay + RS_DELAY) / step + (fx->numInputs > 0 ? RS_DELAY : 0) + 0.5);
+    i->initialDelay = fx->initialDelay;
     i->ioRatio = fx->ioRatio; i->has_replacing = fx->processReplacing != 0; i->has_double = fx->processDoubleReplacing != 0;
 }
 
@@ -178,7 +172,6 @@ static intptr_t VSTCALL master(AEffect* e, int32_t op, int32_t idx, intptr_t val
     if (op == audioMasterCurrentId) return shell_id;
     if (op == audioMasterVersion && closing) return 2400;
     if (closing || !sh) return 0;
-    if (op == audioMasterGetSampleRate && step != 1.0) return (intptr_t)(plug_rate + 0.5);
     int size, m = master_marshal(op, &size);
     Req r; memset(&r, 0, sizeof r);
     r.op = op; r.index = idx; r.value = (int64_t)val; r.opt = opt;
@@ -197,7 +190,6 @@ static intptr_t VSTCALL master(AEffect* e, int32_t op, int32_t idx, intptr_t val
         case audioMasterGetTime:
             r.out = &time_info[ch]; r.out_cap = sizeof(VstTimeInfo);
             if (!call_host(&r) || !r.ret || r.out_len != sizeof(VstTimeInfo)) return 0;
-            if (step != 1.0) { time_info[ch].sampleRate = plug_rate; time_info[ch].samplePos *= step; }
             return (intptr_t)&time_info[ch];
         case audioMasterGetDirectory:
             r.out = directory; r.out_cap = sizeof directory - 1;
@@ -227,7 +219,7 @@ static intptr_t VSTCALL master(AEffect* e, int32_t op, int32_t idx, intptr_t val
                 const VstEvent* ev = evs->events[i];
                 if (!ev) continue;
                 VbEvent* q = &out[n]; memset(q, 0, sizeof *q);
-                q->type = ev->type; q->delta = ch == 1 ? rs_out_delta(ev->deltaFrames) : ev->deltaFrames; q->flags = ev->flags;
+                q->type = ev->type; q->delta = ev->deltaFrames; q->flags = ev->flags;
                 if (ev->type == kVstMidiType) {
                     const VstMidiEvent* me = (const VstMidiEvent*)ev;
                     memcpy(q->midi, me->midiData, 4); q->note_length = me->noteLength; q->note_offset = me->noteOffset;
@@ -329,160 +321,6 @@ static void edit_close(void)
 }
 
 
-// ----------------------------------------------------------------------------- resampling
-// Hosts that run at a rate plugins rarely support (Woof! once used 32000 Hz; S-YXG50 then plays at the wrong pitch)
-// get the plugin at 44100 Hz: inputs are interpolated to the plugin's rate, outputs back to the host's (cubic). Both
-// work on absolute sample counts: plugin sample j takes the host input at j / step - RS_DELAY, host sample k the
-// plugin output at k * step - RS_DELAY, so every sample needed has already been received or rendered.
-// vst2bridge.ini next to the plugin overrides the choice: [<plugin file name without .dll>] or [Default],
-// SampleRate = <rate the plugin always runs at>, or 0 = never resample.
-#define RS_IN_N   8192                          // host-rate input history per channel (power of 2)
-#define RS_OUT_N  16384                         // plugin-rate output history per channel (power of 2)
-#define RS_PIECE  512                           // host frames per render: at most 512 * 8 plugin samples
-static float  rs_in[VB_MAXCH][RS_IN_N], rs_out[VB_MAXCH][RS_OUT_N];
-static float  rs_pin[VB_MAXCH][VB_MAXFRAMES], rs_pout[VB_MAXCH][VB_MAXFRAMES], rs_sink[VB_MAXFRAMES];
-static int64_t rs_host, rs_plug;                // samples received from the host / rendered by the plugin
-static int64_t rs_block_start, rs_render_start; // during a render: host sample of the block start, plugin sample of the render start
-static VbEvent rs_pend[VB_MAXEVENTS]; static uint8_t rs_pend_sx[VB_SYSEX_MAX]; static uint32_t rs_npend, rs_pend_sxn;
-
-static void rs_reset(void)
-{
-    memset(rs_in, 0, sizeof rs_in); memset(rs_out, 0, sizeof rs_out);
-    rs_host = rs_plug = 0; rs_npend = rs_pend_sxn = 0;
-}
-
-static double choose_rate(double hr)
-{
-    static const int standard[] = { 44100, 48000, 88200, 96000, 176400, 192000 };
-    wchar_t ini[MAX_PATH], sec[MAX_PATH];
-    wcsncpy(ini, plugin_path, MAX_PATH - 1); ini[MAX_PATH - 1] = 0;
-    wchar_t* slash = wcsrchr(ini, L'\\'); wchar_t* slash2 = wcsrchr(ini, L'/');
-    if (!slash || (slash2 && slash2 > slash)) slash = slash2;
-    wcsncpy(sec, slash ? slash + 1 : ini, MAX_PATH - 1); sec[MAX_PATH - 1] = 0;
-    wchar_t* dot = wcsrchr(sec, L'.'); if (dot) *dot = 0;
-    if (slash) slash[1] = 0; else ini[0] = 0;
-    if (wcslen(ini) + 16 < MAX_PATH) {
-        wcscat(ini, L"vst2bridge.ini");
-        int v = (int)GetPrivateProfileIntW(sec, L"SampleRate", -1, ini);
-        if (v < 0) v = (int)GetPrivateProfileIntW(L"Default", L"SampleRate", -1, ini);
-        if (v == 0) return hr;
-        if (v >= 8000 && v <= 384000) return v;
-    }
-    for (unsigned i = 0; i < sizeof standard / sizeof standard[0]; i++) if ((int)(hr + 0.5) == standard[i]) return hr;
-    return 44100;
-}
-
-static void rs_set_rate(double hr)
-{
-    host_rate = hr > 0 ? hr : 44100;
-    plug_rate = choose_rate(host_rate);
-    step = plug_rate / host_rate;
-    if (step > 8.0 || step < 0.125) { plug_rate = host_rate; step = 1.0; }     // too far apart: leave it to the plugin
-    rs_reset();
-}
-
-static float cubic(const float* buf, int64_t mask, double x)
-{
-    int64_t i = (int64_t)floor(x); float t = (float)(x - (double)i);
-    float a = i - 1 >= 0 ? buf[(i - 1) & mask] : 0, b = i >= 0 ? buf[i & mask] : 0;
-    float c = i + 1 >= 0 ? buf[(i + 1) & mask] : 0, d = i + 2 >= 0 ? buf[(i + 2) & mask] : 0;
-    return b + 0.5f * t * (c - a + t * (2 * a - 5 * b + 4 * c - d + t * (3 * (b - c) + d - a)));
-}
-
-// MIDI out of the plugin: its frame in the render -> frame in the host's block
-static int32_t rs_out_delta(int32_t d)
-{
-    if (step == 1.0) return d;
-    double k = ((double)(rs_render_start + d) + RS_DELAY) / step - (double)rs_block_start;
-    return k < 0 ? 0 : (int32_t)k;
-}
-
-static void rs_add_event(VstEvents* list, uint32_t* cnt, VstMidiEvent* mev, VstMidiSysexEvent* sev, const VbEvent* e,
-                         const uint8_t* sx, int32_t delta)
-{
-    uint32_t i = *cnt;
-    if (i >= VB_MAXEVENTS) return;
-    if (e->type == kVstSysExType) {
-        memset(&sev[i], 0, sizeof sev[i]);
-        sev[i].type = kVstSysExType; sev[i].byteSize = sizeof sev[i]; sev[i].deltaFrames = delta; sev[i].flags = e->flags;
-        sev[i].dumpBytes = (int32_t)e->sysex_len; sev[i].sysexDump = (char*)sx + e->sysex_off;
-        list->events[(*cnt)++] = (VstEvent*)&sev[i];
-    } else {
-        memset(&mev[i], 0, sizeof mev[i]);
-        mev[i].type = kVstMidiType; mev[i].byteSize = sizeof mev[i]; mev[i].deltaFrames = delta; mev[i].flags = e->flags;
-        mev[i].noteLength = e->note_length; mev[i].noteOffset = e->note_offset;
-        memcpy(mev[i].midiData, e->midi, 4); mev[i].detune = e->detune; mev[i].noteOffVelocity = (char)e->off_velocity;
-        list->events[(*cnt)++] = (VstEvent*)&mev[i];
-    }
-}
-
-// do_process with resampling: n host frames in sh->au (float or double rows), events at host frames
-static void rs_process(int n, int dbl)
-{
-    static VstMidiEvent mev[VB_MAXEVENTS];
-    static VstMidiSysexEvent sev[VB_MAXEVENTS];
-    static char evbuf[sizeof(VstEvents) + VB_MAXEVENTS * sizeof(VstEvent*)];
-    static float* ins[VB_MAXCH + 1]; static float* outs[256];
-    VbAudio* a = &sh->au;
-    int nin = fx->numInputs < VB_MAXCH ? fx->numInputs : VB_MAXCH, nout = fx->numOutputs < 256 ? fx->numOutputs : 256;
-    uint32_t ne = a->n_events > VB_MAXEVENTS ? VB_MAXEVENTS : a->n_events;
-    rs_block_start = rs_host;
-    for (int pos = 0; pos < n; pos += RS_PIECE) {
-        int cnt = n - pos > RS_PIECE ? RS_PIECE : n - pos;
-        int64_t h0 = rs_host, h1 = h0 + cnt;
-        for (int c = 0; c < nin; c++)
-            for (int i = 0; i < cnt; i++)
-                rs_in[c][(h0 + i) & (RS_IN_N - 1)] = c >= a->nin ? 0 : dbl ? (float)a->in[c][pos + i] : ((const float*)a->in[c])[pos + i];
-        int64_t p0 = rs_plug, p1 = (int64_t)floor((double)h1 * step);
-        int m = (int)(p1 - p0);
-        if (m > VB_MAXFRAMES) m = VB_MAXFRAMES;
-        // events of this piece at their plugin frame; events of a piece that renders nothing wait for the next
-        VstEvents* list = (VstEvents*)evbuf; uint32_t ec = 0;
-        if (m > 0) for (uint32_t i = 0; i < rs_npend; i++) rs_add_event(list, &ec, mev, sev, &rs_pend[i], rs_pend_sx, 0);
-        if (m > 0) rs_npend = 0, rs_pend_sxn = 0;
-        for (uint32_t i = 0; i < ne; i++) {
-            const VbEvent* e = &a->events[i];
-            int32_t d = e->delta < 0 ? 0 : e->delta >= n ? n - 1 : e->delta;
-            if (d < pos || (d >= pos + cnt && pos + cnt < n)) continue;
-            if (e->type == kVstSysExType && (uint64_t)e->sysex_off + e->sysex_len > VB_SYSEX_MAX) continue;
-            if (m <= 0) {                                               // keep it (with its SysEx bytes) for the next render
-                if (rs_npend >= VB_MAXEVENTS) continue;
-                VbEvent* q = &rs_pend[rs_npend];
-                *q = *e;
-                if (e->type == kVstSysExType) {
-                    if (rs_pend_sxn + e->sysex_len > VB_SYSEX_MAX) continue;
-                    memcpy(rs_pend_sx + rs_pend_sxn, a->sysex + e->sysex_off, e->sysex_len);
-                    q->sysex_off = rs_pend_sxn; rs_pend_sxn += e->sysex_len;
-                }
-                rs_npend++;
-                continue;
-            }
-            int64_t j = (int64_t)floor((double)(h0 + d - pos) * step) - p0;
-            rs_add_event(list, &ec, mev, sev, e, a->sysex, (int32_t)(j < 0 ? 0 : j >= m ? m - 1 : j));
-        }
-        if (m > 0) {
-            for (int c = 0; c < nin; c++) {
-                for (int j = 0; j < m; j++) rs_pin[c][j] = cubic(rs_in[c], RS_IN_N - 1, (double)(p0 + j) / step - RS_DELAY);
-                ins[c] = rs_pin[c];
-            }
-            for (int c = 0; c < nout; c++) { outs[c] = c < VB_MAXCH ? rs_pout[c] : rs_sink; memset(outs[c], 0, m * sizeof(float)); }
-            rs_render_start = p0;
-            if (ec) { list->numEvents = (int32_t)ec; list->reserved = 0; fx->dispatcher(fx, effProcessEvents, 0, 0, list, 0); }
-            if (fx->processReplacing && (fx->flags & effFlagsCanReplacing)) fx->processReplacing(fx, ins, outs, m);
-            else if (fx->process) fx->process(fx, ins, outs, m);
-            for (int c = 0; c < nout && c < VB_MAXCH; c++)
-                for (int j = 0; j < m; j++) rs_out[c][(p0 + j) & (RS_OUT_N - 1)] = rs_pout[c][j];
-            rs_plug = p0 + m;
-        }
-        for (int c = 0; c < nout && c < VB_MAXCH; c++)
-            for (int k = 0; k < cnt; k++) {
-                float v = cubic(rs_out[c], RS_OUT_N - 1, (double)(h0 + k) * step - RS_DELAY);
-                if (dbl) a->out[c][pos + k] = v; else ((float*)a->out[c])[pos + k] = v;
-            }
-        rs_host = h1;
-    }
-}
-
 // ----------------------------------------------------------------------------- host -> plugin
 
 static void do_process(VbFrame* f)
@@ -497,7 +335,6 @@ static void do_process(VbFrame* f)
     size_t es = dbl ? sizeof(double) : sizeof(float);
     if (n < 0) n = 0;
     if (n > VB_MAXFRAMES) n = VB_MAXFRAMES;
-    if (step != 1.0) { rs_process(n, dbl); f->len = 0; return; }
 
     uint32_t ne = a->n_events > VB_MAXEVENTS ? VB_MAXEVENTS : a->n_events, cnt = 0;
     VstEvents* list = (VstEvents*)evbuf;
@@ -564,17 +401,6 @@ static void do_dispatch(VbFrame* f)
     uint32_t in_len = f->len;
     f->len = 0;
     if (f->op == effEditClose) { edit_close(); f->ret = 0; return; }
-    if (f->op == effSetSampleRate) {                                // the plugin may run at another rate (resampling)
-        rs_set_rate(f->opt);
-        f->ret = fx->dispatcher(fx, effSetSampleRate, 0, 0, 0, (float)plug_rate);
-        return;
-    }
-    if (f->op == effSetBlockSize && step != 1.0) {                  // the plugin gets at most RS_PIECE host frames at once
-        int64_t b = val < RS_PIECE ? val : RS_PIECE;
-        f->ret = fx->dispatcher(fx, effSetBlockSize, 0, (intptr_t)(b * step + 2), 0, 0);
-        return;
-    }
-    if (f->op == effMainsChanged && val) rs_reset();
     switch (m) {
     case M_NONE: ret = fx->dispatcher(fx, f->op, f->index, val, 0, f->opt); break;
     case M_STR_IN:
