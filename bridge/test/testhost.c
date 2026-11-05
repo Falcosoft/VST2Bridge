@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include "../vst2.h"
+#include "../vst2bridge.h"
 
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { printf("FAIL: "); fails++; } else printf("ok:   "); printf(__VA_ARGS__); printf("\n"); fflush(stdout); } while (0)
@@ -56,16 +56,47 @@ typedef struct { int32_t numEvents; intptr_t reserved; VstEvent* ev[4]; } Evs;
 static float inL[12000], inR[12000], outL[12000], outR[12000];
 static double dinL[512], dinR[512], doutL[512], doutR[512];
 
+static void test_direct(const char* bridge, const char* path, const char* other)
+{
+    HMODULE module = LoadLibraryA(bridge);
+    CHECK(module, "load a bridge DLL with no sibling plugin");
+    if (!module) return;
+    typedef AEffect* (VSTCALL *EntryA)(AudioMasterCallback, const char*);
+    typedef AEffect* (VSTCALL *EntryW)(AudioMasterCallback, const wchar_t*);
+    EntryA entry_a = (EntryA)(void*)GetProcAddress(module, "VST2BridgeCreateA");
+    EntryW entry_w = (EntryW)(void*)GetProcAddress(module, "VST2BridgeCreateW");
+    CHECK(entry_a && entry_w, "exports both direct-loading entry points");
+    if (!entry_a || !entry_w) { FreeLibrary(module); return; }
+
+    wchar_t wide[MAX_PATH];
+    int converted = MultiByteToWideChar(CP_ACP, 0, path, -1, wide, MAX_PATH);
+    CHECK(converted, "convert the explicit plugin path to UTF-16");
+    if (!converted) { FreeLibrary(module); return; }
+
+    AEffect* direct[] = { entry_a(master, path), entry_w(master, wide) };
+    for (int i = 0; i < 2; i++) {
+        AEffect* fx = direct[i];
+        CHECK(fx && fx->magic == kEffectMagic, "load plugin by path through VST2BridgeCreate%c", i ? 'W' : 'A');
+        if (!fx || fx->magic != kEffectMagic) continue;
+        fx->dispatcher(fx, effOpen, 0, 0, 0, 0);
+        char vendor[256] = "";
+        fx->dispatcher(fx, effGetVendorString, 0, 0, vendor, 0);
+        CHECK(!strcmp(vendor, other), "direct-loaded plugin runs in the other bitness (%s)", vendor);
+        fx->dispatcher(fx, effClose, 0, 0, 0, 0);
+    }
+    FreeLibrary(module);
+}
+
 int main(int argc, char** argv)
 {
-    if (argc < 2) { printf("usage: testhost <bridge.dll> [other bitness]\n"); return 99; }
+    if (argc < 2) { printf("usage: testhost <bridge.dll> [other bitness] [direct bridge.dll direct plugin.dll]\n"); return 99; }
     const char* other = argc > 2 ? argv[2] : (sizeof(void*) == 8 ? "Fake32" : "Fake64");
     printf("host is %d-bit, bridge %s\n", (int)sizeof(void*) * 8, argv[1]);
     HMODULE m = LoadLibraryA(argv[1]);
     CHECK(m != 0, "load the bridge");
     if (!m) return 1;
     CHECK(GetProcAddress(m, "main") && GetProcAddress(m, "VST2BridgeStub"), "exports main and VST2BridgeStub");
-    Entry entry = (Entry)GetProcAddress(m, "VSTPluginMain");
+    Entry entry = (Entry)(void*)GetProcAddress(m, "VSTPluginMain");
     AEffect* fx = entry ? entry(master) : 0;
     CHECK(fx && fx->magic == kEffectMagic, "plugin created through the helper");
     if (!fx) return 1;
@@ -185,6 +216,8 @@ int main(int argc, char** argv)
             r2->dispatcher(r2, effClose, 0, 0, 0, 0);
         }
     }
+
+    if (argc > 4) test_direct(argv[3], argv[4], other);
 
     printf("RESULT: %s (%d failures)\n", fails ? "FAILED" : "PASSED", fails);
     return fails;

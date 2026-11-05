@@ -15,7 +15,13 @@
 | `<name>.clap` (Linux) | `bridge/clap.c` + `bridge/stub.c` (x86-64, `vst2bridge-linux.clap`) | CLAP plugin; runs `<name>.dll` (32 or 64-bit) in the helper of its bitness under Wine |
 | `<name>.clap/` (macOS bundle) | `bridge/clap.c` + `bridge/stub.c` (universal, `vst2bridge-macos`) | The same for macOS: `<name>.clap/Contents/MacOS/<name>`, `Info.plist`, signed ad hoc |
 
-All bridge DLLs of one bitness are the same file; the bridge takes the plugin from its own name: it removes `.dll` and the suffix `_x64` (64-bit bridge) or `_x86` (32-bit bridge) and loads `<name>.dll` from its own folder. The helper must be in the same folder. The bridge exports `VSTPluginMain`, `main` (old hosts) and the marker `VST2BridgeStub`, by which the patcher recognises its own files (it also skips JBridge's files, which export `JBridgeBootstrap`).
+All bridge DLLs of one bitness are the same file. With filename-based loading, the bridge removes `.dll` and the suffix `_x64` (64-bit bridge) or `_x86` (32-bit bridge) from its own name and loads `<name>.dll` from its own folder. The helper must be in the same folder. The bridge exports `VSTPluginMain`, `main` (old hosts) and the marker `VST2BridgeStub`, by which the patcher recognises its own files (it also skips JBridge's files, which export `JBridgeBootstrap`).
+
+## Direct loading on Windows
+
+A VST2 host can load the bridge DLL for its own bitness and resolve `VST2BridgeCreateA` or `VST2BridgeCreateW`. Both take the host callback and the original plugin's absolute DLL path and return a proxy `AEffect*`, or `NULL` on failure. `A` accepts the Windows ANSI code page and `W` accepts UTF-16. The declarations are in [`bridge/vst2bridge.h`](../bridge/vst2bridge.h).
+
+Keep the helper for the plugin's bitness beside the bridge DLL. The helper starts in the original plugin's directory, so the plugin can find its companion files. Close the returned proxy with `effClose` before unloading the bridge DLL. Direct loading uses the same protocol 2 and 1,024-event limits as filename-based loading.
 
 ## CLAP bridge
 

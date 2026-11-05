@@ -2,3 +2,5 @@ EXPORTS
     VSTPluginMain
     main = vb_main
     VST2BridgeStub
+    VST2BridgeCreateA
+    VST2BridgeCreateW

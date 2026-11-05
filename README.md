@@ -13,6 +13,8 @@ The patcher writes a small bridge DLL and a CLAP bridge for each plugin into the
 
 The CLAP bridge has the VST2 bridge built in, so it works on its own: `<name>_x64.clap` needs only `<name>.dll` and the helper exe in the same folder, not `<name>_x64.dll`. It offers the same plugin with the same features to CLAP hosts.
 
+Windows VST2 hosts with [direct-loading support](docs/technical.md#direct-loading-on-windows) can use one bridge DLL to open plugins by path.
+
 ### Linux and macOS
 
 Linux and macOS cannot load Windows DLLs, so there the patcher writes **only CLAP bridges**, for plugins of either bitness. The CLAP is a native plugin (Linux x86-64; macOS universal, Apple Silicon and Intel) that runs the Windows plugin in the same helper programs under **Wine**:
