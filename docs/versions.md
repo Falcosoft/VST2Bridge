@@ -4,7 +4,7 @@ What changed in each Autobuild release, newest first. Releases are numbered `r<N
 
 | Release | Date | Changes |
 |---|---|---|
-| next | | Internal: the tests also run the Linux CLAP with AddressSanitizer + UndefinedBehaviorSanitizer; the Linux / macOS bridge reads its "helper gone" flag atomically (no behaviour change). |
+| r17 | 2026-11-05 | Internal: the tests also run the Linux CLAP with AddressSanitizer + UndefinedBehaviorSanitizer; the Linux / macOS bridge reads its "helper gone" flag atomically (no behaviour change). |
 | r15 | 2026-11-05 | Linux / macOS: the helper's audio thread reads the bridge's signals from its socket directly, one thread wake-up less per audio block. |
 | r15 | 2026-11-05 | Windows bridge: the audio thread now polls briefly for the helper's answer before it sleeps and the helper's audio thread uses MMCSS, so a `process` call returns sooner and uses less CPU with many instances (about a third faster in our Wine benchmark). `VST2BRIDGE_SPIN=0` turns the polling off. |
 | r14 | 2026-11-05 | Windows VST2 hosts can open plugins by path with `VST2BridgeCreateA/W`, so they can reuse a single bridge DLL without generating one per plugin. |
