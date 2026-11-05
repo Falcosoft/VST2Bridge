@@ -1,0 +1,34 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.28701.123
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "VST2BridgeStub", "bridge\VST2BridgeStub.vcxproj", "{95AC86E9-FA12-4454-8B88-9015748B4673}"
+EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "VST2BridgeHost", "bridge\VST2BridgeHost.vcxproj", "{A66BC36D-DAD9-4D74-9099-7F027AF9452E}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x86 = Debug|x86
+		Debug|x64 = Debug|x64
+		Release|x86 = Release|x86
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{95AC86E9-FA12-4454-8B88-9015748B4673}.Debug|x86.ActiveCfg = Debug|Win32
+		{95AC86E9-FA12-4454-8B88-9015748B4673}.Debug|x86.Build.0 = Debug|Win32
+		{95AC86E9-FA12-4454-8B88-9015748B4673}.Debug|x64.ActiveCfg = Debug|x64
+		{95AC86E9-FA12-4454-8B88-9015748B4673}.Debug|x64.Build.0 = Debug|x64
+		{95AC86E9-FA12-4454-8B88-9015748B4673}.Release|x86.ActiveCfg = Release|Win32
+		{95AC86E9-FA12-4454-8B88-9015748B4673}.Release|x86.Build.0 = Release|Win32
+		{95AC86E9-FA12-4454-8B88-9015748B4673}.Release|x64.ActiveCfg = Release|x64
+		{95AC86E9-FA12-4454-8B88-9015748B4673}.Release|x64.Build.0 = Release|x64
+		{A66BC36D-DAD9-4D74-9099-7F027AF9452E}.Debug|x86.ActiveCfg = Debug|Win32
+		{A66BC36D-DAD9-4D74-9099-7F027AF9452E}.Debug|x86.Build.0 = Debug|Win32
+		{A66BC36D-DAD9-4D74-9099-7F027AF9452E}.Debug|x64.ActiveCfg = Debug|x64
+		{A66BC36D-DAD9-4D74-9099-7F027AF9452E}.Debug|x64.Build.0 = Debug|x64
+		{A66BC36D-DAD9-4D74-9099-7F027AF9452E}.Release|x86.ActiveCfg = Release|Win32
+		{A66BC36D-DAD9-4D74-9099-7F027AF9452E}.Release|x86.Build.0 = Release|Win32
+		{A66BC36D-DAD9-4D74-9099-7F027AF9452E}.Release|x64.ActiveCfg = Release|x64
+		{A66BC36D-DAD9-4D74-9099-7F027AF9452E}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+EndGlobal

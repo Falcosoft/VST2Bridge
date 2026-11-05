@@ -7,3 +7,7 @@ dist/
 *.spec
 bridge/*.clap
 bridge/vst2bridge-macos
+/.vs/
+/bin/
+/obj/
+*.vcxproj.user

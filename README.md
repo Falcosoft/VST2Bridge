@@ -41,6 +41,10 @@ The patcher speaks 29 languages (the system language, or pick one at the top rig
 
 The patcher's icon is the one of the SXG-Create-NF patcher; its artwork is derived from "Vst icon" by SyafriStudio (Magnific).
 
+## Direct loading on Windows
+
+Hosts with direct-loading support, such as Falcosoft BASS_VST, use the original plugin path. Build the four portable DLL and EXE files with the [Visual Studio solution](docs/development.md#visual-studio-2019-direct-loading-builds).
+
 ## More documentation
 
 | Document | Contents |

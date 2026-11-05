@@ -30,6 +30,24 @@ The helpers are the same on all systems (mingw-w64); the Linux and macOS patcher
 
 The patcher runs from source with Python 3.10+ and Tkinter (`python patcher.py`, or `python patcher.py --cli [folder] [--format both|vst2|clap]`; it reads the top level of the folder holding `patcher.py` and the folders added in the window or given on the command line, and writes the bridges and the helper next to each plugin, which is never moved or changed); it takes the bridge files from `bridge/`.
 
+### Visual Studio 2019 direct-loading builds
+
+Open `VST2Bridge.sln` in Visual Studio 2019 16.11 with the v142 x86/x64 tools and Windows SDK 10.0.20348.0 or later. Build `Release | x86` and `Release | x64`, or run these commands from the VS 2019 Developer Command Prompt.
+
+```bat
+msbuild VST2Bridge.sln /m /p:Configuration=Release /p:Platform=x86
+msbuild VST2Bridge.sln /m /p:Configuration=Release /p:Platform=x64
+```
+
+| Solution platform | Output directory | Files |
+|---|---|---|
+| x86 | `bin\Win32\Release` | `vst2bridge-x86.dll`, `vst2bridge-host32.exe` |
+| x64 | `bin\x64\Release` | `vst2bridge-x64.dll`, `vst2bridge-host64.exe` |
+
+The Release configurations use the static runtime (`/MT`), full linking (`/INCREMENTAL:NO`), unreferenced code and data removal (`/OPT:REF`), and identical COMDAT folding (`/OPT:ICF`). Map files are generated separately with `/MAP`.
+
+Package the four DLL and EXE files together. For BASS_VST, put them in a `VST2Bridge` folder beside `bass_vst.dll` and select the original plugin DLL in the host. An x86 host uses `vst2bridge-x86.dll` with `vst2bridge-host64.exe`. An x64 host uses `vst2bridge-x64.dll` with `vst2bridge-host32.exe`. Both sides of a pair must use protocol 2.
+
 ## Tests
 
 ```
