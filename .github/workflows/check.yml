@@ -118,6 +118,7 @@ jobs:
           gzip -9 -c bridge/vst2bridge-macos > bin/vst2bridge-macos.gz   # gzipped: PyInstaller would thin a bare Mach-O file
           python -m pip install --quiet pyinstaller
           python -m PyInstaller --onefile --windowed --noconfirm --clean --name VST2Bridge-Patcher \
+            --icon utility/icons/patcher.icns --add-data "utility/icons:icons" \
             --paths utility --paths . --add-data "bin:bin" --add-data "docs/versions.md:docs" \
             --hidden-import patcher_i18n --hidden-import bridges --hidden-import pe --hidden-import selfupdate patcher.py
           P=dist/VST2Bridge-Patcher.app/Contents/MacOS/VST2Bridge-Patcher

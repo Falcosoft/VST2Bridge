@@ -37,6 +37,8 @@ The bridge leaves the sample rate to the host: the plugin always gets the rate t
 
 The patcher speaks 29 languages (the system language, or pick one at the top right), updates itself (**Update** appears when a new release is out) and shows the changes with **What's new?**. Without a window: `VST2Bridge-Patcher.exe --cli [folder] [--dry-run] [--output <folder>] [--format both|vst2|clap]` (Linux / macOS: `VST2Bridge-Patcher --cli …`; `--format` counts on Windows only). The command line searches `input` and the folder you give.
 
+The patcher's icon is the one of the SXG-Create-NF patcher; its artwork is derived from "Vst icon" by SyafriStudio (Magnific).
+
 ## More documentation
 
 | Document | Contents |

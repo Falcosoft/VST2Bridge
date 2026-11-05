@@ -148,10 +148,16 @@ jobs:
         run: |
           set -euo pipefail
           echo "VERSION = '$REVISION'" > patcher_version.py
-          python -m PyInstaller --onefile --windowed --noconfirm --clean \
+          case "${{ runner.os }}" in                  # program icon: .ico (Windows), .icns (macOS); Linux has none
+            Windows) ICON="--icon utility/icons/patcher.ico" ;;
+            macOS)   ICON="--icon utility/icons/patcher.icns" ;;
+            *)       ICON="" ;;
+          esac
+          python -m PyInstaller --onefile --windowed --noconfirm --clean $ICON \
             --name VST2Bridge-Patcher \
             --paths utility --paths . \
             --add-data "bin:bin" \
+            --add-data "utility/icons:icons" \
             --add-data "docs/versions.md:docs" \
             --hidden-import patcher_i18n --hidden-import patcher_version --hidden-import certifi \
             --hidden-import bridges --hidden-import pe --hidden-import selfupdate \

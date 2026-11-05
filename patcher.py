@@ -29,6 +29,8 @@ CODE = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
 INPUT, OUTPUT = HERE / 'input', HERE / 'output'
 BIN = CODE / 'bin' if FROZEN else CODE / 'bridge'          # the bridge binaries (dev: built by `make -C bridge`)
 CHANGELOG = CODE / 'docs' / 'versions.md'
+ICONS = [CODE / ('icons' if FROZEN else 'utility/icons') / n for n in ('patcher.png', 'patcher_32.png', 'patcher_16.png')]
+                                                # window icons in three sizes (the exe / app icon is set by the build)
 sys.path.insert(0, str(CODE / 'utility'))
 sys.path.insert(0, str(CODE))
 try : from patcher_version import VERSION
@@ -126,6 +128,7 @@ def selftest(out : str | None) -> int :
         else : kind_ok = macho_archs(data) == {0x0100000C, 0x01000007}                                          # arm64 + x86_64
         if not (kind_ok and bridges.MARKER in data and b'clap_entry' in data) : problems.append(name)
     if not CHANGELOG.is_file() : problems.append('docs/versions.md')
+    if not all(f.is_file() for f in ICONS) : problems.append('icons')
     text = f'VST2Bridge-Patcher {VERSION}'
     if out : Path(out).write_text(text + '\n')
     print(text, 'OK' if not problems else 'PROBLEMS: ' + ', '.join(problems))
@@ -142,6 +145,8 @@ def main_window(opts : dict) :
     root = tk.Tk()
     root.title(f'VST2Bridge Patcher {VERSION}')
     root.minsize(640, 360)
+    try : root.iconphoto(True, *[tk.PhotoImage(file = str(f)) for f in ICONS])
+    except Exception : pass                                     # a missing icon must never stop the patcher
     try : INPUT.mkdir(exist_ok = True)
     except OSError : pass
     st = dict(lang = system_language(LANGUAGES), folders = [Path(opts['folder'])] if opts.get('folder') else [], out = Path(opts.get('output') or OUTPUT),
