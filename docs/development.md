@@ -10,7 +10,7 @@
 | `bridge/test/` | `fakevst.c` (test plugin), `testhost.c` (VST2 test host), `testclap.c` (CLAP test host, Windows and Linux), `smoke.c` (loads a Linux / macOS CLAP without Wine), `run_tests.sh` (all bridges under Wine) |
 | `patcher.py`, `patcher_i18n.py` | The patcher (Tkinter window and `--cli`); texts in 29 languages (the same as SXG-Create-NF; a missing key falls back to English) |
 | `utility/icons/` | The patcher's icon: `patcher.ico` (Windows exe), `patcher.icns` (macOS app), `patcher.png` / `patcher_32.png` / `patcher_16.png` (window icon in Tk); taken from SXG-Create-NF, artwork derived from "Vst icon" by SyafriStudio (Magnific) |
-| `utility/bridges.py` | Finding plugins (`input`, the top level of the patcher's folder, added folders) and moving the plugin into `output` and writing the bridges and helper there |
+| `utility/bridges.py` | Finding plugins (the top level of the patcher's folder, added folders) and writing the bridges and helper next to each plugin |
 | `utility/pe.py` | Reading machine type and exports of a DLL |
 | `utility/selfupdate.py` | Self-update from the GitHub releases (adapted from SXG-Create-NF) |
 | `docs/versions.md` | Version history, shown by the patcher's **What's new?** |
@@ -28,7 +28,7 @@ make -C bridge macos    # vst2bridge-macos, universal arm64 + x86_64 (clang on a
 
 The helpers are the same on all systems (mingw-w64); the Linux and macOS patchers bundle them with their CLAP. The frozen macOS patcher carries `vst2bridge-macos.gz`: PyInstaller would otherwise thin a bare Mach-O data file to the architecture of the build machine (the `--selftest` checks that both architectures are there). `VB_TEST_SYSTEM=windows|linux|macos` makes the patcher from source act as that system's patcher (CI only).
 
-The patcher runs from source with Python 3.10+ and Tkinter (`python patcher.py`, or `python patcher.py --cli [folder] [--output <folder>] [--format both|vst2|clap]`; it reads `input` and the top level of the folder holding `patcher.py` and writes `output` there unless `--output` says otherwise or the window's **Change…** button chose another folder, which is kept in `settings.json` (`%APPDATA%\VST2Bridge`, `~/Library/Application Support/VST2Bridge` or `~/.config/vst2bridge`) and read again at the next start; `--output` wins over it); it takes the bridge files from `bridge/`.
+The patcher runs from source with Python 3.10+ and Tkinter (`python patcher.py`, or `python patcher.py --cli [folder] [--format both|vst2|clap]`; it reads the top level of the folder holding `patcher.py` and the folders added in the window or given on the command line, and writes the bridges and the helper next to each plugin, which is never moved or changed); it takes the bridge files from `bridge/`.
 
 ## Tests
 

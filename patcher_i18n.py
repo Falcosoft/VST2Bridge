@@ -430,16 +430,18 @@ _X = {
         '未找到 Wine。请安装 Wine：CLAP 桥接借助它运行插件。'),
 }
 
-# Texts of the input / output folders, the plugin checkboxes and the Windows output format (#9). Only English and German so
+# Texts of the search folders, the plugin checkboxes and the Windows output format (#9, #17). Only English and German so
 # far; the other languages show the English text until they are translated.
-NEW_KEYS = ('folders', 'add_folder', 'output', 'out_format', 'fmt_both', 'fmt_vst2', 'fmt_clap', 'st_dup', 'none_input', 'done_out', 'out_change')
+NEW_KEYS = ('folders', 'add_folder', 'hint', 'out_format', 'fmt_both', 'fmt_vst2', 'fmt_clap', 'none_input', 'done_out')
 _N = {
-'en' : ('Search in:', 'Add folder…', 'Output folder:', 'Output format:', 'VST2 + CLAP', 'VST2 only', 'CLAP only', 'name taken',
-        'No VST2 plugins found. Put the plugin DLLs into the "input" folder or next to the patcher (subfolders of "input" are fine) or add another folder.',
-        '{ok} plugin(s) written to {out}.', 'Change…'),
-'de' : ('Suchen in:', 'Ordner hinzufügen…', 'Ausgabeordner:', 'Ausgabeformat:', 'VST2 + CLAP', 'Nur VST2', 'Nur CLAP', 'Name doppelt',
-        'Keine VST2-Plugins gefunden. Legen Sie die Plugin-DLLs in den Ordner "input" oder neben den Patcher (Unterordner von "input" gehen auch) oder fügen Sie einen anderen Ordner hinzu.',
-        '{ok} Plugin(s) nach {out} geschrieben.', 'Ändern…'),
+'en' : ('Search in:', 'Add folder…', 'Bridges are written next to each plugin; the plugins stay where they are.',
+        'Output format:', 'VST2 + CLAP', 'VST2 only', 'CLAP only',
+        'No VST2 plugins found. Put the plugin DLLs next to the patcher or add the folder they are in.',
+        '{ok} plugin(s) done: the bridges lie next to the plugins.'),
+'de' : ('Suchen in:', 'Ordner hinzufügen…', 'Die Bridges werden neben jedes Plugin geschrieben; die Plugins bleiben, wo sie sind.',
+        'Ausgabeformat:', 'VST2 + CLAP', 'Nur VST2', 'Nur CLAP',
+        'Keine VST2-Plugins gefunden. Legen Sie die Plugin-DLLs neben den Patcher oder fügen Sie den Ordner hinzu, in dem sie liegen.',
+        '{ok} Plugin(s) fertig: die Bridges liegen neben den Plugins.'),
 }
 
 TEXT = {lang : dict(zip(KEYS, t)) for lang, t in _T.items()}
