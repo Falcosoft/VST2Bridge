@@ -4,7 +4,7 @@ What changed in each Autobuild release, newest first. Releases are numbered `r<N
 
 | Release | Date | Changes |
 |---|---|---|
-| next | | License: the project is now licensed under the LGPL v3 (was named GPL-3.0 in the README and the release notes); README and development notes have a license section. |
+| r11 | 2026-11-05 | License: the project is now licensed under the LGPL v3 (was named GPL-3.0 in the README and the release notes); README and development notes have a license section. |
 | r10 | 2026-11-05 | Patcher: plugin DLLs lying directly in the patcher's own folder are found as well (not only in `input` or an added folder); the bridges, helper files and the `output` folder are not mistaken for plugins. |
 | r10 | 2026-11-05 | Patcher: the output folder can be chosen in the window (**Change…** next to *Output folder*); the choice is remembered for the next start. `--output` on the command line still wins. |
 | r9 | 2026-11-05 | Patcher: the original plugins are no longer copied but moved from `input` (or an added folder) into `output`, so `input` is empty afterwards and `output` holds everything for the host: plugin, bridge files and helper exe. Plugins already in `output` are listed too, so their bridges can be refreshed. |
