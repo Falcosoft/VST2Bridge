@@ -51,34 +51,32 @@ jobs:
           x86_64-w64-mingw32-gcc -O2 -Ibridge -shared -o "$T/Input/sub/plug64.dll" bridge/test/fakevst.c -static-libgcc -s
           mkdir -p fake && cp "$T/Input/plug32.dll" fake/        # for the macOS job
           cp -r "$T/Input" "$T/Win"
-          echo "== as the Windows patcher"
-          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win" --output "$T/WinOut"
-          O="$T/WinOut"
-          test -f "$O/plug32.dll" && test -f "$O/plug32_x64.dll" && test -f "$O/plug32_x64.clap" && test -f "$O/vst2bridge-host32.exe"
-          test -f "$O/plug64.dll" && test -f "$O/plug64_x86.dll" && test -f "$O/plug64_x86.clap" && test -f "$O/vst2bridge-host64.exe"
-          test ! -e "$T/Win/plug32_x64.dll"
-          test ! -e "$T/Win/plug32.dll" && test ! -e "$T/Win/sub/plug64.dll"      # the plugins were moved to the output folder
-          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win" --output "$O" | grep -c current | grep -qx 2
+          echo "== as the Windows patcher (bridges next to the plugins, the plugins stay)"
+          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win"
+          test -f "$T/Win/plug32.dll" && test -f "$T/Win/plug32_x64.dll" && test -f "$T/Win/plug32_x64.clap" && test -f "$T/Win/vst2bridge-host32.exe"
+          test -f "$T/Win/sub/plug64.dll" && test -f "$T/Win/sub/plug64_x86.dll" && test -f "$T/Win/sub/plug64_x86.clap" && test -f "$T/Win/sub/vst2bridge-host64.exe"
+          cmp "$T/Input/plug32.dll" "$T/Win/plug32.dll" && cmp "$T/Input/sub/plug64.dll" "$T/Win/sub/plug64.dll"      # originals unchanged
+          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win" | grep -c current | grep -qx 2
           echo "== Windows output formats"
           cp -r "$T/Input" "$T/Win2"
-          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win2" --output "$T/V" --format vst2
-          test -f "$T/V/plug32_x64.dll" && test ! -e "$T/V/plug32_x64.clap"
+          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win2" --format vst2
+          test -f "$T/Win2/plug32_x64.dll" && test ! -e "$T/Win2/plug32_x64.clap"
           cp -r "$T/Input" "$T/Win3"
-          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win3" --output "$T/C" --format clap
-          test -f "$T/C/plug32_x64.clap" && test ! -e "$T/C/plug32_x64.dll"
+          VB_TEST_SYSTEM=windows python3 patcher.py --cli "$T/Win3" --format clap
+          test -f "$T/Win3/plug32_x64.clap" && test ! -e "$T/Win3/plug32_x64.dll"
           echo "== as the Linux patcher (CLAP only)"
-          python3 patcher.py --cli "$T/Input" --output "$T/LinOut"
-          test -f "$T/LinOut/plug32.dll" && test -f "$T/LinOut/plug32.clap" && test -f "$T/LinOut/vst2bridge-host32.exe" && test ! -e "$T/LinOut/plug32_x64.dll"
-          test -f "$T/LinOut/plug64.clap" && test -f "$T/LinOut/vst2bridge-host64.exe"
-          python3 patcher.py --cli "$T/Input" --output "$T/LinOut" | grep -c current | grep -qx 2
+          python3 patcher.py --cli "$T/Input"
+          test -f "$T/Input/plug32.dll" && test -f "$T/Input/plug32.clap" && test -f "$T/Input/vst2bridge-host32.exe" && test ! -e "$T/Input/plug32_x64.dll"
+          test -f "$T/Input/sub/plug64.clap" && test -f "$T/Input/sub/vst2bridge-host64.exe"
+          python3 patcher.py --cli "$T/Input" | grep -c current | grep -qx 2
           echo "== the patcher's own folder as a source (top level only)"
-          mkdir -p "$T/Root/sub" "$T/Root/out"
-          cp fake/plug32.dll "$T/Root/"; cp "$T/LinOut/plug64.dll" "$T/Root/sub/";   # the Linux run above moved the plugins out of Input
-          cp "$T/LinOut/plug32.clap" "$T/LinOut/vst2bridge-host32.exe" "$T/Root/"
-          python3 -I - "$T/Root" "$T/Root/out" <<'PY'
+          mkdir -p "$T/Root/sub"
+          cp fake/plug32.dll "$T/Root/"; cp "$T/Input/sub/plug64.dll" "$T/Root/sub/"
+          cp "$T/Input/plug32.clap" "$T/Input/vst2bridge-host32.exe" "$T/Root/"
+          python3 -I - "$T/Root" <<'PY'
           import sys; sys.path.insert(0, 'utility'); from pathlib import Path; import bridges
-          root, out = Path(sys.argv[1]), Path(sys.argv[2])
-          names = [p.path.name for p in bridges.scan([root / 'input'], Path('bridge'), out, flat = [root])]
+          root = Path(sys.argv[1])
+          names = [p.path.name for p in bridges.scan([], Path('bridge'), flat = [root])]
           assert names == ['plug32.dll'], names     # plug64.dll sits in a subfolder, the .clap / helper are no plugins
           PY
 
@@ -137,10 +135,10 @@ jobs:
           P=dist/VST2Bridge-Patcher.app/Contents/MacOS/VST2Bridge-Patcher
           "$P" --selftest
           mkdir -p t && cp dl/fake/plug32.dll t/
-          "$P" --cli "$PWD/t" --output "$PWD/o"
-          find o
-          test -f o/plug32.dll && test ! -e t/plug32.dll        # moved into the output folder
-          codesign --verify --verbose o/plug32.clap
-          ./smoke o/plug32.clap/Contents/MacOS/plug32 "$PWD/o/plug32.clap"
-          ./smoke o/plug32.clap/Contents/MacOS/plug32
-          "$P" --cli "$PWD/t" --output "$PWD/o" | grep -q current
+          "$P" --cli "$PWD/t"
+          find t
+          cmp t/plug32.dll dl/fake/plug32.dll                   # the plugin stays where it is, unchanged
+          codesign --verify --verbose t/plug32.clap
+          ./smoke t/plug32.clap/Contents/MacOS/plug32 "$PWD/t/plug32.clap"
+          ./smoke t/plug32.clap/Contents/MacOS/plug32
+          "$P" --cli "$PWD/t" | grep -q current
