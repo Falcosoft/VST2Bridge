@@ -1,6 +1,6 @@
 # VST2Bridge
 
-A free, universal VST2 bridge for Windows: use **32-bit VST2 plugins in 64-bit hosts** and **64-bit plugins in 32-bit hosts**, as VST2 or as **CLAP**. On **Linux and macOS** (Apple Silicon and Intel) it makes Windows VST2 plugins usable as **CLAP** plugins, run under Wine. No installation, no registry, free for everybody (GPL-3.0).
+A free, universal VST2 bridge for Windows: use **32-bit VST2 plugins in 64-bit hosts** and **64-bit plugins in 32-bit hosts**, as VST2 or as **CLAP**. On **Linux and macOS** (Apple Silicon and Intel) it makes Windows VST2 plugins usable as **CLAP** plugins, run under Wine. No installation, no registry, free for everybody (LGPL-3.0).
 
 ## How it works
 
@@ -47,3 +47,7 @@ The patcher's icon is the one of the SXG-Create-NF patcher; its artwork is deriv
 | [Limitations](docs/limitations.md) | What does not work (yet) |
 | [Development](docs/development.md) | Building, tests, releases, project layout |
 | [Version history](docs/versions.md) | Changes of every release |
+
+## License
+
+VST2Bridge is free software under the [GNU Lesser General Public License, version 3](LICENSE) (LGPL-3.0). The bundled CLAP headers in `bridge/clap/` come from the CLAP SDK and stay under their own MIT license (`bridge/clap/LICENSE`).

@@ -44,3 +44,7 @@ It builds the test plugin and the test host in both bitnesses and checks both di
 Every push to `main` that touches the bridge or the patcher runs `build.yml`: bridge build and tests, the patcher frozen with PyInstaller on Windows, Linux (ubuntu-22.04, for an old glibc), macOS Apple Silicon and macOS Intel (each with the bridge files of its system and `docs/versions.md`), `--selftest`, and a release `autobuild-r<N>` with `VST2Bridge-Patcher-r<N>-windows.exe`, `-linux.tar.gz`, `-macos-applesilicon.zip` and `-macos-intel.zip`. The tag, the asset names and `--selftest-out` are a contract with `utility/selfupdate.py` (Windows: the new exe next to the old one; Linux: the binary is replaced; macOS: the .app is swapped).
 
 Add a row to `docs/versions.md` for every change that ends up in a release: `| next | | <change> |`, newest on top. The workflow replaces `next` with the release number and date.
+
+## License
+
+The project is licensed under the LGPL v3 (`LICENSE`; the GPL v3 text it builds on is included in the same file). The CLAP headers in `bridge/clap/` are MIT-licensed third-party files and keep their own `LICENSE`. New source files need no extra header; the `LICENSE` file covers them.

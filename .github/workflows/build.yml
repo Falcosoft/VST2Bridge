@@ -218,7 +218,7 @@ jobs:
           artifacts: assets/*
           artifactErrorsFailBuild: true
           body: |
-            The **VST2Bridge Patcher** makes 32-bit VST2 plugins usable in 64-bit hosts and 64-bit plugins in 32-bit hosts. On Linux and macOS it makes Windows VST2 plugins (32-bit and 64-bit) usable as CLAP plugins, run under Wine. Free for everybody (GPL-3.0).
+            The **VST2Bridge Patcher** makes 32-bit VST2 plugins usable in 64-bit hosts and 64-bit plugins in 32-bit hosts. On Linux and macOS it makes Windows VST2 plugins (32-bit and 64-bit) usable as CLAP plugins, run under Wine. Free for everybody (LGPL-3.0).
 
             **DOWNLOAD**
             - Windows: `...-windows.exe`
