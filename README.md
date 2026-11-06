@@ -43,7 +43,7 @@ The patcher's icon is the one of the SXG-Create-NF patcher; its artwork is deriv
 
 ## Direct loading on Windows
 
-Hosts with direct-loading support, such as Falcosoft BASS_VST, use the original plugin path. Build the four portable DLL and EXE files with the [Visual Studio solution](docs/development.md#visual-studio-2019-direct-loading-builds).
+Hosts with direct-loading support, such as Falcosoft BASS_VST, use the original plugin path. Build the four portable DLL and EXE files with the [Visual Studio solution](docs/development.md#visual-studio-2019-direct-loading-builds). To add direct loading to your own host, see the [host integration guide](docs/host-integration.md).
 
 ## More documentation
 
