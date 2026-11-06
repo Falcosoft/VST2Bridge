@@ -45,6 +45,7 @@ The patcher's icon is the one of the SXG-Create-NF patcher; its artwork is deriv
 
 | Document | Contents |
 |---|---|
+| [Host integration](docs/host-integration.md) | Adding direct VST2Bridge loading to a Windows VST2 host |
 | [How the bridge works](docs/technical.md) | Processes, shared memory, threads, which VST2 calls are passed and how |
 | [Limitations](docs/limitations.md) | What does not work (yet) |
 | [Development](docs/development.md) | Building, tests, releases, project layout |
