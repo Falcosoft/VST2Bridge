@@ -48,6 +48,18 @@ The Release configurations use the static runtime (`/MT`), full linking (`/INCRE
 
 Package the four DLL and EXE files together. For BASS_VST, put them in a `VST2Bridge` folder beside `bass_vst.dll` and select the original plugin DLL in the host. An x86 host uses `vst2bridge-x86.dll` with `vst2bridge-host64.exe`. An x64 host uses `vst2bridge-x64.dll` with `vst2bridge-host32.exe`. Both sides of a pair must use protocol 2.
 
+
+### Bridging native CLAP plugins on Windows
+
+A direct-loading host can pass an opposite-bitness `.clap` path to
+`VST2BridgeCreateA/W`. The helper loads the separately built CLAP2VST2 Legacy
+wrapper beside its EXE and passes it the original plugin path. Use
+`CLAP2VST2-x86.dll` with `vst2bridge-host32.exe` and `CLAP2VST2-x64.dll` with
+`vst2bridge-host64.exe`. The wrapper must export `CLAP2VST2CreateW`.
+
+The helper's main thread services CLAP2VST2 idle callbacks even with the
+editor closed. The bridge DLL and helper use protocol 2.
+
 ## Tests
 
 ```

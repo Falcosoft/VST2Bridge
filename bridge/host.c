@@ -24,6 +24,7 @@ typedef struct { HANDLE ev; SOCKET s; } Sig;    // a signal to the bridge: a nam
 static VbShared* sh;
 static HANDLE   mutex, ev_main_h, ev_audio_h, ev_aux_h;         // signals from the bridge (net: local events fed by readers)
 static Sig      sig_ready, sig_main_s, sig_main_v, sig_audio_s, sig_aux_s;
+static int      clap_mode;                      // Windows: this helper hosts CLAP2VST2
 static int      net;                            // 1: run by the Linux / macOS CLAP under Wine
 static char     title[64];                      // net: title of the editor window the Linux CLAP looks for
 static AEffect* fx;
@@ -173,6 +174,7 @@ static intptr_t VSTCALL master(AEffect* e, int32_t op, int32_t idx, intptr_t val
     if (op == audioMasterCurrentId) return shell_id;
     if (op == audioMasterVersion && closing) return 2400;
     if (closing || !sh) return 0;
+    if (clap_mode && op == audioMasterNeedIdle) return 1;  // this helper supplies idle on its main thread
     int size, m = master_marshal(op, &size);
     Req r; memset(&r, 0, sizeof r);
     r.op = op; r.index = idx; r.value = (int64_t)val; r.opt = opt;
@@ -589,6 +591,42 @@ static HANDLE open_obj(const char* prefix, const char* suffix, int kind)
 
 typedef AEffect* (VSTCALL *VstMain)(AudioMasterCallback);
 
+static AEffect* load_clap(const wchar_t* file)
+{
+    typedef AEffect* (VSTCALL *ClapCreateW)(AudioMasterCallback, const wchar_t*);
+#ifdef _WIN64
+    static const wchar_t wrapper[] = L"CLAP2VST2-x64.dll";
+#else
+    static const wchar_t wrapper[] = L"CLAP2VST2-x86.dll";
+#endif
+    // Resolve the wrapper beside the helper. The working directory belongs to the plugin.
+    wchar_t path[MAX_PATH];
+    DWORD n = GetModuleFileNameW(0, path, MAX_PATH);
+    if (!n || n >= MAX_PATH) { fail("cannot locate the CLAP2VST2 wrapper directory"); return 0; }
+    while (n && path[n - 1] != '\\' && path[n - 1] != '/') n--;
+    if (!n || n + sizeof wrapper / sizeof *wrapper > MAX_PATH) {
+        fail("the CLAP2VST2 wrapper path is too long or invalid");
+        return 0;
+    }
+    wcscpy(path + n, wrapper);
+
+    HMODULE dll = LoadLibraryExW(path, 0, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!dll) {
+        char msg[160];
+        snprintf(msg, sizeof msg, "cannot load the CLAP2VST2 wrapper beside the helper (error %lu)", GetLastError());
+        fail(msg);
+        return 0;
+    }
+    ClapCreateW create = (ClapCreateW)(void*)GetProcAddress(dll, "CLAP2VST2CreateW");
+    if (!create) { fail("the CLAP2VST2 wrapper has no CLAP2VST2CreateW export"); return 0; }
+    AEffect* effect = create(master, file);
+    if (!effect || effect->magic != kEffectMagic || !effect->dispatcher) {
+        fail("the CLAP2VST2 wrapper could not open the CLAP plugin");
+        return 0;
+    }
+    return effect;  // One instance per helper. Keep the wrapper loaded until the process exits.
+}
+
 int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show)
 {
     (void)hi; (void)hp; (void)cmd; (void)show;
@@ -621,14 +659,29 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show)
     HANDLE hp_ = host_pid ? OpenProcess(SYNCHRONIZE, FALSE, host_pid) : 0;     // net: the closed connections tell instead
     if (hp_) CreateThread(0, 0, watchdog, hp_, 0, 0);
 
-    // the plugin finds its files next to itself (the bridge also starts the helper in the plugin's folder)
-    HMODULE dll = LoadLibraryExW(argv[1], 0, LOAD_WITH_ALTERED_SEARCH_PATH);
-    if (!dll) { char m[200]; snprintf(m, sizeof m, "cannot load the plugin (error %lu)", GetLastError()); fail(m); return 4; }
-    VstMain entry = (VstMain)(void*)GetProcAddress(dll, "VSTPluginMain");
-    if (!entry) entry = (VstMain)(void*)GetProcAddress(dll, "main");
-    if (!entry) { fail("the DLL has no VSTPluginMain: not a VST2 plugin"); return 4; }
-    fx = entry(master);
-    if (!fx || fx->magic != kEffectMagic) { fail("the plugin did not start (VSTPluginMain returned no plugin)"); return 4; }
+    size_t path_len = wcslen(argv[1]);
+    clap_mode = !net && path_len >= 5 && !_wcsicmp(argv[1] + path_len - 5, L".clap");
+    if (clap_mode) {
+        fx = load_clap(argv[1]);
+        if (!fx) return 4;
+    } else {
+        // the plugin finds its files next to itself (the bridge also starts the helper in the plugin's folder)
+        HMODULE dll = LoadLibraryExW(argv[1], 0, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (!dll) { char m[200]; snprintf(m, sizeof m, "cannot load the plugin (error %lu)", GetLastError()); fail(m); return 4; }
+        VstMain entry = (VstMain)(void*)GetProcAddress(dll, "VSTPluginMain");
+        if (!entry) entry = (VstMain)(void*)GetProcAddress(dll, "main");
+        if (!entry) { fail("the DLL has no VSTPluginMain: not a VST2 plugin"); return 4; }
+        fx = entry(master);
+        if (!fx || fx->magic != kEffectMagic) { fail("the plugin did not start (VSTPluginMain returned no plugin)"); return 4; }
+    }
+    UINT_PTR clap_idle_timer = clap_mode ? SetTimer(NULL, 0, 15, NULL) : 0;
+    if (clap_mode && !clap_idle_timer) {
+        InterlockedExchange(&closing, 1);
+        fx->dispatcher(fx, effClose, 0, 0, 0, 0);
+        fail("cannot start the CLAP main-thread idle timer");
+        return 4;
+    }
+
     fill_info();
     sh->ok = 1;
     HANDLE at = CreateThread(0, 0, audio_thread, 0, 0, 0);
@@ -639,9 +692,14 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show)
         if (r == WAIT_OBJECT_0) serve_top(&sh->main, &main_active, main_to_stub());
         else if (r == WAIT_OBJECT_0 + 1) {
             MSG msg;
-            while (PeekMessageW(&msg, 0, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+            while (!quitting && PeekMessageW(&msg, 0, 0, 0, PM_REMOVE)) {
+                if (clap_idle_timer && !msg.hwnd && msg.message == WM_TIMER && msg.wParam == clap_idle_timer)
+                    fx->dispatcher(fx, effIdle, 0, 0, 0, 0);
+                else { TranslateMessage(&msg); DispatchMessageW(&msg); }
+            }
         } else break;
     }
+    if (clap_idle_timer) KillTimer(NULL, clap_idle_timer);
     edit_close();
     InterlockedExchange(&closing, 1);
     InterlockedExchange(&quitting, 1);
